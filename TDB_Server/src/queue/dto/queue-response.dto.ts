@@ -1,28 +1,34 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-// 스키마에 명시된 QueueItem 인터페이스를 클래스로 구현
 export class QueueItem {
-  @ApiProperty({ example: 1, description: 'Slot number in the machine' })
+  @ApiProperty({ description: '슬롯 번호', example: 1 })
   slot: number;
 
-  @ApiProperty({ example: 2, description: 'Number of pills to dispense' })
+  @ApiProperty({ description: '배출 개수', example: 1 })
   count: number;
 
-  @ApiProperty({ required: false, example: '비타민C', description: 'Name of the medicine' })
+  @ApiProperty({ description: '약품/영양제 ID', example: 'medicine_abc' })
+  medi_id: string;
+
+  @ApiProperty({ description: '약품/영양제 이름', example: '타이레놀', required: false })
   medicine?: string;
 
-  @ApiProperty({ required: false, example: 'schedule-123', description: 'ID of the schedule item' })
+  @ApiProperty({ description: '스케줄 ID', example: 'schedule_xyz', required: false })
   scheduleId?: string;
-
-  @ApiProperty({ required: false, example: 'medicine-123', description: 'ID of the medicine' })
-  medi_id: string;
 }
 
-// 스키마에 명시된 BuildQueueOut 인터페이스를 클래스로 구현
-export class BuildQueueResponseDto {
-  @ApiProperty({ example: 'ok' })
-  status: 'ok';
+export class TimePhase {
+  @ApiProperty({ description: '시간대 (morning, afternoon, evening)', example: 'morning' })
+  time: 'morning' | 'afternoon' | 'evening';
 
-  @ApiProperty({ type: [QueueItem] })
-  queue: QueueItem[];
+  @ApiProperty({ type: [QueueItem], description: '해당 시간대의 배출 아이템 목록' })
+  items: QueueItem[];
+}
+
+export class BuildQueueResponseDto {
+  @ApiProperty({ description: '응답 상태', example: 'ok' })
+  status: string;
+
+  @ApiProperty({ type: [TimePhase], description: '시간대별 배출 대기열' })
+  queue: TimePhase[];
 }

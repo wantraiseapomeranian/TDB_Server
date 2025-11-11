@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # 통합 서버 (앱 + 라즈베리파이)
+  tdb-integrated-server:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USERNAME=root
+      - DB_PASSWORD=tdb_password
+      - DB_DATABASE=tdb
+      - JWT_SECRET=your-super-secret-jwt-key-here
+      - JWT_EXPIRES_IN=7d
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - tdb-network
+
+  # MySQL 데이터베이스
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=tdb_password
+      - MYSQL_DATABASE=tdb
+      - MYSQL_CHARACTER_SET_SERVER=utf8mb4
+      - MYSQL_COLLATION_SERVER=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    networks:
+      - tdb-network
+
+  # phpMyAdmin (선택사항)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    ports:
+      - "8080:80"
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - PMA_USER=root
+      - PMA_PASSWORD=tdb_password
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    networks:
+      - tdb-network
+
+volumes:
+  mysql_data:
+
+networks:
+  tdb-network:
+    driver: bridge 

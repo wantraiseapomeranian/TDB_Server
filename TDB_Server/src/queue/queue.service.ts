@@ -5,7 +5,8 @@ import { Repository } from 'typeorm';
 import { DayOfWeek, Schedule } from '../schedule/entities/schedule.entity';
 import { MachineSlot } from '../machine/entities/machine-slot.entity';
 import { Machine } from '../machine/entities/machine.entity';
-import { QueueItem } from './dto/queue-response.dto'; // 응답 DTO 임포트
+import { QueueItem, TimePhase } from './dto/queue-response.dto'; // 응답 DTO 임포트
+import { TimeOfDay } from '../schedule/entities/schedule.entity'; // TimeOfDay 타입 임포트
 
 @Injectable()
 export class QueueService {
@@ -22,9 +23,7 @@ export class QueueService {
     private readonly machineRepository: Repository<Machine>,
   ) { }
 
-  // --- 변경된 부분 ---
-  // 반환 타입을 스키마에 맞는 QueueItem 배열로 변경
-  async buildForDay(machineId: string, userId: string, day: string): Promise<QueueItem[]> {
+  async buildForDay(machineId: string, userId: string, day: string): Promise<TimePhase[]> {
     this.logger.log(`사용자 ${userId}의 ${day} 요일 배출 대기열 생성 중...`);
 
     const user = await this.userRepository.findOne({ where: { user_id: userId } });
@@ -59,26 +58,33 @@ export class QueueService {
       }
     }
 
-    // 3. 응답 형식에 맞게 하나의 배열로 데이터 구성
-    const queue: QueueItem[] = []; // 시간대별 그룹 대신 단일 배열로 초기화
+    // 3. 시간대별 phase 배열 초기화 (morning, afternoon, evening 순서 보장)
+    const timePhases: TimePhase[] = [
+      { time: 'morning', items: [] },
+      { time: 'afternoon', items: [] },
+      { time: 'evening', items: [] },
+    ];
 
+    // 4. 스케줄을 시간대별로 그룹화하여 items에 추가
     for (const schedule of schedules) {
       const slotNumber = mediIdToSlotMap.get(schedule.medi_id);
 
       if (slotNumber !== undefined) {
-        // 찾은 스케줄을 바로 queue 배열에 추가
-        queue.push({
-          slot: slotNumber,
-          count: schedule.dose ?? 1,      // 0이면 실배출이 없으니 기본 1 권장
-          medi_id: schedule.medi_id,      // ★ 필수: 리포트 DTO 요구
-          medicine: schedule.medicine?.name,
-          scheduleId: schedule.schedule_id,
-        });
+        const timePhase = timePhases.find(phase => phase.time === schedule.time_of_day);
+        if (timePhase) {
+          timePhase.items.push({
+            slot: slotNumber,
+            count: schedule.dose ?? 1,
+            medi_id: schedule.medi_id,
+            medicine: schedule.medicine?.name,
+            scheduleId: schedule.schedule_id,
+          });
+        }
       } else {
         this.logger.warn(`[QueueService] 스케줄(ID: ${schedule.schedule_id})의 약(${schedule.medi_id})이 기기(${machineId})의 슬롯에 없습니다. 건너뜁니다.`);
       }
     }
 
-    return queue; // 최종적으로 생성된 단일 배열을 반환
+    return timePhases; // 최종적으로 시간대별 그룹화된 배열을 반환
   }
 }

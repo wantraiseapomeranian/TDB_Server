@@ -7,6 +7,8 @@ import { MachineSlot } from '../machine/entities/machine-slot.entity';
 import { User } from '../users/entities/users.entity';
 import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
 import { MachineService } from '../machine/machine.service'; // 추가
+import { Schedule } from '../schedule/entities/schedule.entity';
+import { DoseHistory } from '../dose-history/dose-history.entity';
 
 @Injectable()
 export class MedicineService {
@@ -25,6 +27,12 @@ export class MedicineService {
 
     @InjectRepository(UserGroupMembership)
     private readonly membershipRepository: Repository<UserGroupMembership>,
+
+    @InjectRepository(Schedule)
+    private readonly scheduleRepository: Repository<Schedule>,
+
+    @InjectRepository(DoseHistory)
+    private readonly doseHistoryRepository: Repository<DoseHistory>,
 
     // 공통 슬롯 할당 서비스 주입
     private readonly machineService: MachineService,
@@ -400,7 +408,7 @@ export class MedicineService {
   }
 
   /**
-   * 5. 약물 삭제
+   * 5. 약물 삭제 (연관 데이터 모두 삭제)
    */
   async deleteMedicine(userId: string, mediId: string) {
     try {
@@ -417,27 +425,45 @@ export class MedicineService {
         throw new NotFoundException('약물을 찾을 수 없습니다.');
       }
 
-      // 관련 슬롯 정보도 삭제
+      console.log(`🔥 [MedicineService] 약물 삭제 시작: ${mediId} - ${medicine.name}`);
+
+      // 1️⃣ 스케줄 삭제 (Schedule 테이블)
+      const deletedSchedules = await this.scheduleRepository.delete({
+        medi_id: mediId,
+        group_id: group.group_id,
+      });
+      console.log(`   ✅ 스케줄 삭제 완료: ${deletedSchedules.affected}개`);
+
+      // 2️⃣ 복용 기록 삭제 (DoseHistory 테이블)
+      const deletedHistory = await this.doseHistoryRepository.delete({
+        medi_id: mediId,
+        group_id: group.group_id,
+      });
+      console.log(`   ✅ 복용 기록 삭제 완료: ${deletedHistory.affected}개`);
+
+      // 3️⃣ 슬롯 정보 삭제 (MachineSlot 테이블)
       const machine = await this.machineRepository.findOne({
         where: { group_id: group.group_id },
       });
 
       if (machine) {
-        await this.machineSlotRepository.delete({
+        const deletedSlots = await this.machineSlotRepository.delete({
           machine_id: machine.machine_id,
           medi_id: mediId,
         });
+        console.log(`   ✅ 슬롯 정보 삭제 완료: ${deletedSlots.affected}개`);
       }
 
-      // 약물 정보 삭제
+      // 4️⃣ 약물 정보 삭제 (Medicine 테이블)
       await this.medicineRepository.remove(medicine);
+      console.log(`   ✅ 약물 정보 삭제 완료`);
 
-      console.log(`🔥 [MedicineService] 약물 삭제: ${mediId} - ${medicine.name}`);
+      console.log(`🎉 [MedicineService] 약물 삭제 완료: ${mediId} - ${medicine.name}`);
 
       return {
         success: true,
         data: { medi_id: mediId },
-        message: '약물이 삭제되었습니다.',
+        message: '약물과 관련된 모든 정보가 삭제되었습니다.',
       };
     } catch (error) {
       console.error('🔥 [MedicineService] 약물 삭제 오류:', error);
@@ -449,12 +475,25 @@ export class MedicineService {
     }
   }
 
-  /**
+   /**
    * 6. 약물 검색 (이름 기반)
    */
   async searchMedicine(userId: string, query: string) {
     try {
+      console.log(`[DEBUG] searchMedicine called for userId: ${userId}`); // userId 로깅
       const group = await this.getUserGroup(userId);
+      console.log(`[DEBUG] User ${userId} belongs to group_id: ${group.group_id}`); // 사용자의 group_id 로깅
+
+      // 그룹에 등록된 기기가 있는지 확인
+      const machine = await this.machineRepository.findOne({
+        where: { group_id: group.group_id },
+      });
+
+      if (!machine) {
+        console.log(`[DEBUG] No machine found for group_id: ${group.group_id}`); // 기기를 찾지 못했을 경우 로깅
+        throw new BadRequestException('디스펜서 등록이 필요합니다.');
+      }
+      console.log(`[DEBUG] Machine found for group_id: ${group.group_id}, machine_id: ${machine.machine_id}`); // 기기를 찾았을 경우 기기 상세 정보 로깅
       
       const medicines = await this.medicineRepository
         .createQueryBuilder('medicine')
@@ -479,6 +518,9 @@ export class MedicineService {
       };
     } catch (error) {
       console.error('🔥 [MedicineService] 약물 검색 오류:', error);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
       return {
         success: false,
         data: [],
@@ -486,6 +528,7 @@ export class MedicineService {
       };
     }
   }
+
 
   /**
    * 7. 약물 재고 조회
