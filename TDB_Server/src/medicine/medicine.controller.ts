@@ -4,237 +4,452 @@ import {
   Post,
   Put,
   Delete,
-  Param,
   Body,
+  Param,
+  Query,
   UseGuards,
-  NotFoundException,
-  ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { MedicineService } from './medicine.service';
 import { AccessTokenGuard } from '../auth/guard/bearer-token.guard';
-import { Medicine } from './entities/medicine.entity';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User } from '../users/entities/users.entity';
+import { User } from '../auth/decorator/user.decorator';
+import { ScheduleService } from '../schedule/schedule.service';
 
 @UseGuards(AccessTokenGuard)
 @Controller('medicine')
 export class MedicineController {
   constructor(
     private readonly medicineService: MedicineService,
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
+    private readonly scheduleService: ScheduleService,
   ) {}
 
   /**
-   * 🔥 새로 추가: 사용자별 약물 목록 조회 (권한 포함)
+   * 1. 약물 목록 조회 (/api/medicine/list/{userId})
    */
-  @Get('user/:userId')
+  @Get('list/:userId')
   async getMedicineListByUser(@Param('userId') userId: string) {
-    console.log(`🔍 [Controller] 사용자별 약물 조회 요청: userId=${userId}`);
-    
-    const medicines = await this.medicineService.getMedicineListByUser(userId);
-    
-    console.log(`🔍 [Controller] 조회된 약물 개수: ${medicines.length}`);
-    medicines.forEach((medicine, index) => {
-      console.log(`🔍 [Controller] 약물 ${index + 1}: ${medicine.name}`, {
-        medi_id: medicine.medi_id,
-        permission: medicine.permission,
-        slot: medicine.slot,
-        totalQuantity: medicine.totalQuantity,
-        doseCount: medicine.doseCount
-      });
-    });
-    
-    return {
-      success: true,
-      data: medicines
-    };
+    console.log(`🔥 [MedicineController] 사용자별 약물 목록 조회: userId=${userId}`);
+    return this.medicineService.getMedicineList(userId);
   }
 
   /**
-   * 가족 연결 코드 기준 약 목록 조회
+   * 2. 약물 목록 조회 (/api/medicine/list?connect={userId})
    */
-  @Get('list/:connect')
-  async getMedicineList(@Param('connect') connect: string) {
-    console.log(`🔍 [Controller] 약 목록 조회 요청: connect=${connect}`);
-    
-    const medicines = await this.medicineService.getMedicineListByConnect(connect);
-    
-    console.log(`🔍 [Controller] 조회된 약 개수: ${medicines.length}`);
-    medicines.forEach((medicine, index) => {
-      console.log(`🔍 [Controller] 약 ${index + 1}: ${medicine.name}`, {
-        medi_id: medicine.medi_id,
-        slot: (medicine as any).slot,
-        totalQuantity: (medicine as any).totalQuantity,
-        doseCount: (medicine as any).doseCount
-      });
-    });
-    
-    // 🔥 표준화된 응답 형식으로 반환
-    return {
-      success: true,
-      data: medicines
-    };
+  @Get('list')
+  async getMedicineList(@Query('connect') connect: string) {
+    if (!connect) {
+      throw new BadRequestException('connect 파라미터가 필요합니다.');
+    }
+    console.log(`🔥 [MedicineController] 약물 목록 조회: connect=${connect}`);
+    return this.medicineService.getMedicineList(connect);
   }
 
   /**
-   * 약 정보 등록
+   * 3. 약물 검색 (/api/medicine/search?query={query}&userId={userId})
    */
-  @Post()
-  async addMedicine(
-    @Body('connect') connect: string,
-    @Body()
-    dto: {
-      medi_id?: string;
-      name?: string;
-      warning?: boolean;
-      start_date?: string;
-      end_date?: string;
-      target_users?: string[] | null;
-      requestUser?: string;
-    },
+  @Get('search')
+  async searchMedicine(
+    @Query('query') query: string,
+    @Query('userId') userId?: string,
+    @Query('connect') connect?: string,
   ) {
-    if (dto.requestUser) {
-      const requestingUser = await this.userRepo.findOne({
-        where: { user_id: dto.requestUser },
-        select: ['role', 'connect']
-      });
-      
-      if (!requestingUser) {
-        throw new NotFoundException('요청 사용자를 찾을 수 없습니다.');
-      }
-      
-      if (requestingUser.role !== 'parent') {
-        throw new ConflictException('약 등록은 메인 계정(부모)만 가능합니다. 서브 계정은 스케줄만 설정할 수 있습니다.');
-      }
-      
-      if (requestingUser.connect !== connect) {
-        throw new ConflictException('다른 가족의 약을 등록할 수 없습니다.');
-      }
-      
-      console.log(`🔍 약 등록 권한 확인 완료 - 부모 계정: ${dto.requestUser}, connect: ${connect}`);
+    const searchUserId = userId || connect;
+    
+    if (!query) {
+      throw new BadRequestException('검색어(query)가 필요합니다.');
+    }
+    if (!searchUserId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
     }
 
-    const medicineData: Partial<Medicine> = {
-      medi_id: dto.medi_id,
-      name: dto.name,
-      warning: dto.warning,
-      start_date: dto.start_date ? new Date(dto.start_date) : undefined,
-      end_date: dto.end_date ? new Date(dto.end_date) : undefined,
-      target_users: dto.target_users,
-    };
+    console.log(`🔥 [MedicineController] 약물 검색: query="${query}", userId=${searchUserId}`);
+    return this.medicineService.searchMedicine(searchUserId, query);
+  }
+
+  /**
+   * 4. 약물 재고 조회 (/api/medicine/inventory?connect={userId})
+   */
+  @Get('inventory')
+  async getMedicineInventory(@Query('connect') connect: string) {
+    if (!connect) {
+      throw new BadRequestException('connect 파라미터가 필요합니다.');
+    }
+    console.log(`🔥 [MedicineController] 약물 재고 조회: connect=${connect}`);
+    return this.medicineService.getMedicineInventory(connect);
+  }
+
+  /**
+   * 🔥 호환성: 약물 스케줄 조회 (/api/medicine/schedule/{medicineId}) - 구체적인 라우트 먼저
+   */
+  @Get('schedule/:medicineId')
+  async getMedicineSchedule(
+    @Param('medicineId') medicineId: string,
+    @Query('memberId') memberId: string,
+  ) {
+    console.log(`🔥 [MedicineController] 약물 스케줄 조회: medicineId=${medicineId}, memberId=${memberId}`);
     
-    console.log(`🔍 [Controller] 약물 등록 요청:`, {
-      medi_id: dto.medi_id,
-      name: dto.name,
-      target_users: dto.target_users,
-      requestUser: dto.requestUser
-    });
-    
-    return this.medicineService.addMedicine(connect, medicineData);
-  }
+    if (!memberId) {
+      throw new BadRequestException('사용자 ID(memberId)가 필요합니다.');
+    }
 
-  /**
-   * 약 상세 조회
-   */
-  @Get(':connect/:medi_id')
-  async getMedicine(
-    @Param('connect') connect: string,
-    @Param('medi_id') medi_id: string,
-  ) {
-    return this.medicineService.findOne(medi_id, connect);
-  }
-
-  /**
-   * 약 정보 수정
-   */
-  @Put(':id')
-  async updateMedicine(
-    @Param('id') id: string,
-    @Body('connect') connect: string,
-    @Body()
-    updateDto: {
-      name?: string;
-      warning?: boolean;
-      start_date?: string;
-      end_date?: string;
-    },
-  ) {
-    const medicineUpdateData: Partial<Medicine> = {
-      name: updateDto.name,
-      warning: updateDto.warning,
-      start_date: updateDto.start_date
-        ? new Date(updateDto.start_date)
-        : undefined,
-      end_date: updateDto.end_date ? new Date(updateDto.end_date) : undefined,
-    };
-    return this.medicineService.updateMedicine(id, connect, medicineUpdateData);
-  }
-
-  /**
-   * 약 정보 삭제
-   */
-  @Delete(':connect/:medi_id')
-  async deleteMedicine(
-    @Param('connect') connect: string,
-    @Param('medi_id') medi_id: string,
-  ) {
-    return this.medicineService.deleteMedicine(medi_id, connect);
-  }
-
-  /**
-   * 약 이름으로 검색
-   */
-  @Get('search/:connect/:name')
-  async searchMedicine(
-    @Param('connect') connect: string,
-    @Param('name') name: string,
-  ) {
-    return this.medicineService.searchByName(connect, name);
-  }
-
-  // 🔧 디버그용: 잘못된 Machine 데이터 정리
-  @Post('debug/clear-machines/:connect')
-  async clearMachineData(@Param('connect') connect: string) {
-    return this.medicineService.clearMachineData(connect);
-  }
-
-  // 🔧 디버그용: connect 데이터 조회
-  @Get('debug/connect/:connect')
-  async debugConnectData(@Param('connect') connect: string) {
-    return this.medicineService.debugConnectData(connect);
-  }
-
-  /**
-   * 수동 배출 요청
-   */
-  @Post('manual-dispense')
-  async requestManualDispense(@Body() request: {
-    medi_id: string;
-    slot: number;
-    m_uid: string;
-    dispense_count: number;
-    reason: 'guidance' | 'missed' | 'emergency' | 'extra';
-  }) {
-    console.log('🔥 [Controller] 수동 배출 요청:', request);
-    
+    // ScheduleService를 직접 호출하여 스케줄 조회
     try {
-      const result = await this.medicineService.processManualDispense(request);
+      // ScheduleService를 직접 호출하여 스케줄 조회
+      const result = await this.scheduleService.getSchedule(medicineId, memberId);
+      const schedules = result.data.schedules;
+      const slotInfo = result.data.slotInfo;
       
-      console.log('🔥 [Controller] 수동 배출 성공:', result);
-      return {
-        success: true,
-        data: result
+      console.log(`[MedicineController] 조회된 스케줄 개수: ${schedules.length}`);
+      
+      // 빈 배열인 경우 기본값으로 응답
+      if (schedules.length === 0) {
+        console.log(`[MedicineController] 스케줄이 없어서 기본값 반환`);
+        
+        return {
+          data: {
+            schedules: [],
+            schedule: {
+              mon: { morning: false, afternoon: false, evening: false },
+              tue: { morning: false, afternoon: false, evening: false },
+              wed: { morning: false, afternoon: false, evening: false },
+              thu: { morning: false, afternoon: false, evening: false },
+              fri: { morning: false, afternoon: false, evening: false },
+              sat: { morning: false, afternoon: false, evening: false },
+              sun: { morning: false, afternoon: false, evening: false }
+            },
+            totalQuantity: '',
+            morningDose: 0,
+            afternoonDose: 0,
+            eveningDose: 0,
+            doseCount: '0',
+            slot: 1
+          }
+        };
+      }
+      
+      // 스케줄이 있는 경우 기존 로직 수행
+      const schedule = {
+        mon: { morning: false, afternoon: false, evening: false },
+        tue: { morning: false, afternoon: false, evening: false },
+        wed: { morning: false, afternoon: false, evening: false },
+        thu: { morning: false, afternoon: false, evening: false },
+        fri: { morning: false, afternoon: false, evening: false },
+        sat: { morning: false, afternoon: false, evening: false },
+        sun: { morning: false, afternoon: false, evening: false }
       };
-    } catch (error) {
-      console.error('🔥 [Controller] 수동 배출 실패:', error);
+      
+      // 시간대별 복용량 추출
+      const timeDoses = {
+        morningDose: 0,
+        afternoonDose: 0,
+        eveningDose: 0
+      };
+      
+      // 조회된 스케줄 배열을 객체로 변환하고 시간대별 복용량 수집
+      schedules.forEach((item: any) => {
+        if (item.day_of_week && item.time_of_day) {
+          schedule[item.day_of_week][item.time_of_day] = true;
+          
+          if (item.time_of_day === 'morning' && timeDoses.morningDose === 0) {
+            timeDoses.morningDose = item.dose || 0;
+          } else if (item.time_of_day === 'afternoon' && timeDoses.afternoonDose === 0) {
+            timeDoses.afternoonDose = item.dose || 0;
+          } else if (item.time_of_day === 'evening' && timeDoses.eveningDose === 0) {
+            timeDoses.eveningDose = item.dose || 0;
+          }
+        }
+      });
+      
       return {
-        success: false,
-        error: {
-          message: error.message || '수동 배출 처리 중 오류가 발생했습니다.'
+        data: {
+          schedules: schedules,
+          schedule: schedule,
+          totalQuantity: slotInfo?.total?.toString() || '',
+          morningDose: timeDoses.morningDose,
+          afternoonDose: timeDoses.afternoonDose,
+          eveningDose: timeDoses.eveningDose,
+          doseCount: Math.max(timeDoses.morningDose, timeDoses.afternoonDose, timeDoses.eveningDose).toString(),
+          slot: slotInfo?.slot_number || 1
+        }
+      };
+      
+    } catch (error) {
+      console.error(`🚨 [MedicineController] 스케줄 조회 에러:`, error);
+      
+      // 에러 발생시 기본값 반환
+      return {
+        data: {
+          schedules: [],
+          schedule: {
+            mon: { morning: false, afternoon: false, evening: false },
+            tue: { morning: false, afternoon: false, evening: false },
+            wed: { morning: false, afternoon: false, evening: false },
+            thu: { morning: false, afternoon: false, evening: false },
+            fri: { morning: false, afternoon: false, evening: false },
+            sat: { morning: false, afternoon: false, evening: false },
+            sun: { morning: false, afternoon: false, evening: false }
+          },
+          totalQuantity: '',
+          morningDose: 0,
+          afternoonDose: 0,
+          eveningDose: 0,
+          doseCount: '0',
+          slot: 1
         }
       };
     }
   }
-}
+
+  /**
+   * 5. 약물 상세 조회 (/api/medicine/{mediId}?userId={userId}) - 일반적인 라우트는 나중에
+   */
+  @Get(':mediId')
+  async getMedicineDetail(
+    @Param('mediId') mediId: string,
+    @Query('userId') userId?: string,
+    @Query('connect') connect?: string,
+  ) {
+    const searchUserId = userId || connect;
+    
+    if (!searchUserId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+
+    console.log(`🔥 [MedicineController] 약물 상세 조회: mediId=${mediId}, userId=${searchUserId}`);
+    return this.medicineService.getMedicineDetail(searchUserId, mediId);
+  }
+
+  /**
+   * 6. 약물 등록 (/api/medicine/add) - 호환성
+   */
+  @Post('add')
+  async addMedicine(
+    @Body() body: {
+      name: string;
+      userId?: string;
+      connect?: string;
+      start_date?: string;
+      end_date?: string;
+      target_users?: string[];
+      slot?: number;
+      total?: number;
+      totalQuantity?: string; // 호환성
+    },
+  ) {
+    const userId = body.userId || body.connect;
+    
+    if (!userId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+    if (!body.name) {
+      throw new BadRequestException('약물명(name)이 필요합니다.');
+    }
+
+    // totalQuantity를 total로 변환 (호환성)
+    const total = body.total || (body.totalQuantity ? parseInt(body.totalQuantity) : undefined);
+
+    const medicineData = {
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      target_users: body.target_users,
+      slot: body.slot,
+      total: total,
+    };
+
+    console.log(`🔥 [MedicineController] 약물 등록 (add):`, { userId, medicineData });
+    return this.medicineService.saveMedicine(userId, medicineData);
+  }
+
+  /**
+   * 7. 약물 등록 (/api/medicine) - 기본
+   */
+  @Post()
+  async saveMedicine(
+    @Body() body: {
+      name: string;
+      userId?: string;
+      connect?: string;
+      start_date?: string;
+      end_date?: string;
+      target_users?: string[];
+      slot?: number;
+      total?: number;
+      totalQuantity?: string; // 호환성
+    },
+  ) {
+    const userId = body.userId || body.connect;
+    
+    if (!userId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+    if (!body.name) {
+      throw new BadRequestException('약물명(name)이 필요합니다.');
+    }
+
+    // totalQuantity를 total로 변환 (호환성)
+    const total = body.total || (body.totalQuantity ? parseInt(body.totalQuantity) : undefined);
+
+    const medicineData = {
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      target_users: body.target_users,
+      slot: body.slot,
+      total: total,
+    };
+
+    console.log(`🔥 [MedicineController] 약물 등록:`, { userId, medicineData });
+    return this.medicineService.saveMedicine(userId, medicineData);
+  }
+
+  /**
+   * 7. 약물 수정 (/api/medicine/{mediId})
+   */
+  @Put(':mediId')
+  async updateMedicine(
+    @Param('mediId') mediId: string,
+    @Body() body: {
+      name?: string;
+      userId?: string;
+      connect?: string;
+      start_date?: string;
+      end_date?: string;
+      target_users?: string[];
+      total?: number;
+      totalQuantity?: string; // 호환성
+    },
+  ) {
+    const userId = body.userId || body.connect;
+    
+    if (!userId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+
+    // totalQuantity를 total로 변환 (호환성)
+    const total = body.total || (body.totalQuantity ? parseInt(body.totalQuantity) : undefined);
+
+    const updateData = {
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      target_users: body.target_users,
+      total: total,
+    };
+
+    console.log(`🔥 [MedicineController] 약물 수정:`, { mediId, userId, updateData });
+    return this.medicineService.updateMedicine(userId, mediId, updateData);
+  }
+
+  /**
+   * 8. 약물 삭제 (/api/medicine/{connect}/{mediId})
+   */
+  @Delete(':connect/:mediId')
+  async deleteMedicine(
+    @Param('connect') connect: string,
+    @Param('mediId') mediId: string,
+  ) {
+    console.log(`🔥 [MedicineController] 약물 삭제: connect=${connect}, mediId=${mediId}`);
+    return this.medicineService.deleteMedicine(connect, mediId);
+  }
+
+  /**
+   * 9. 약물 수량 업데이트 (/api/medicine/quantity/{mediId}/quantity)
+   */
+  @Put('quantity/:mediId/quantity')
+  async updateMedicineQuantity(
+    @Param('mediId') mediId: string,
+    @Body() body: {
+      userId?: string;
+      connect?: string;
+      doseCount?: number;
+      totalQuantity?: string;
+    },
+  ) {
+    const userId = body.userId || body.connect;
+    
+    if (!userId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+
+    // doseCount 또는 totalQuantity를 total로 변환
+    const total = body.doseCount || (body.totalQuantity ? parseInt(body.totalQuantity) : undefined);
+
+    if (total === undefined) {
+      throw new BadRequestException('수량(doseCount 또는 totalQuantity)이 필요합니다.');
+    }
+
+    const updateData = { total };
+
+    console.log(`🔥 [MedicineController] 약물 수량 업데이트:`, { mediId, userId, total });
+    return this.medicineService.updateMedicine(userId, mediId, updateData);
+  }
+
+  /**
+   * 🔥 호환성 추가: 사용자별 약물 목록 조회 (/api/medicine/user/{userId})
+   */
+  @Get('user/:userId')
+  async getMedicineListCompatibility(@Param('userId') userId: string) {
+    console.log(`🔥 [MedicineController] 호환성 - 사용자별 약물 목록 조회: userId=${userId}`);
+    return this.medicineService.getMedicineList(userId);
+  }
+
+  /**
+   * 🔥 프론트엔드 호환성: 약물 수정 (/api/medicine - PUT without ID)
+   */
+  @Put()
+  async updateMedicineCompat(
+    @Body() body: {
+      mediId: string;
+      name?: string;
+      userId?: string;
+      connect?: string;
+      start_date?: string;
+      end_date?: string;
+      target_users?: string[];
+      total?: number;
+      totalQuantity?: string;
+    },
+  ) {
+    if (!body.mediId) {
+      throw new BadRequestException('약물 ID(mediId)가 필요합니다.');
+    }
+    
+    const userId = body.userId || body.connect;
+    if (!userId) {
+      throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
+    }
+
+    const total = body.total || (body.totalQuantity ? parseInt(body.totalQuantity) : undefined);
+
+    const updateData = {
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      target_users: body.target_users,
+      total: total,
+    };
+
+    console.log(`🔥 [MedicineController] 호환성 - 약물 수정:`, { mediId: body.mediId, userId, updateData });
+    return this.medicineService.updateMedicine(userId, body.mediId, updateData);
+  }
+
+  /**
+   * 🔥 프론트엔드 호환성: 약물 삭제 (/api/medicine - DELETE without params)
+   */
+  @Delete()
+  async deleteMedicineCompat(
+    @Body() body: {
+      connect: string;
+      mediId: string;
+    },
+  ) {
+    if (!body.connect || !body.mediId) {
+      throw new BadRequestException('connect와 mediId가 필요합니다.');
+    }
+    
+    console.log(`🔥 [MedicineController] 호환성 - 약물 삭제:`, body);
+    return this.medicineService.deleteMedicine(body.connect, body.mediId);
+  }
+
+} 

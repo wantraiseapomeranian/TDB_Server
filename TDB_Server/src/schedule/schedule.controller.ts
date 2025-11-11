@@ -11,8 +11,8 @@ import { ScheduleService } from './schedule.service';
 import { AccessTokenGuard } from '../auth/guard/bearer-token.guard';
 import { AgeValidationService } from '../validation/age-validation.service';
 
-// 🔥 임시로 인증 가드 비활성화 (개발/테스트용)
-// @UseGuards(AccessTokenGuard)
+// 🔥 프로덕션용 인증 가드 활성화
+@UseGuards(AccessTokenGuard)
 @Controller('schedule')
 export class ScheduleController {
   constructor(
@@ -125,7 +125,7 @@ export class ScheduleController {
   /**
    * 🔥 V3: 매트릭스 뷰 스케줄 저장 (요일×시간별 개별 복용량 지원)
    */
-  @Post(':medicineId/:memberId')
+  @Post('medicine/:medicineId/:memberId')
   async saveMedicineScheduleV3(
     @Param('medicineId') medicineId: string,
     @Param('memberId') memberId: string,
@@ -212,7 +212,9 @@ export class ScheduleController {
   ) {
     console.log(`[Controller] 스케줄 조회 요청: medicineId=${medicineId}, memberId=${memberId}`);
     
-    const schedules = await this.scheduleService.getSchedule(medicineId, memberId);
+    const result = await this.scheduleService.getSchedule(medicineId, memberId);
+    const schedules = result.data.schedules;
+    const slotInfo = result.data.slotInfo;
     
     console.log(`[Controller] 조회된 스케줄 개수: ${schedules.length}`);
     
@@ -251,8 +253,8 @@ export class ScheduleController {
         dose: schedules[0].dose,
         day_of_week: schedules[0].day_of_week,
         time_of_day: schedules[0].time_of_day,
-        machine_total: (schedules[0] as any)?.machine?.total,
-        machine_slot: (schedules[0] as any)?.machine?.slot
+        machine_total: slotInfo?.total,
+        machine_slot: slotInfo?.slot_number
       });
     }
     
@@ -314,14 +316,14 @@ export class ScheduleController {
       data: {
         schedules: schedules, // 원본 배열도 포함
         schedule: schedule,   // 변환된 객체
-        totalQuantity: (schedules[0] as any)?.machine?.total?.toString() || '',
+        totalQuantity: slotInfo?.total?.toString() || '',
         // 🔥 시간대별 복용량 개별 반환
         morningDose: timeDoses.morningDose,
         afternoonDose: timeDoses.afternoonDose,
         eveningDose: timeDoses.eveningDose,
         // 🔥 하위 호환성을 위해 doseCount도 유지 (가장 많이 사용되는 복용량)
         doseCount: Math.max(timeDoses.morningDose, timeDoses.afternoonDose, timeDoses.eveningDose).toString(),
-        slot: (schedules[0] as any)?.machine?.slot || 1
+        slot: slotInfo?.slot_number || 1
       }
     };
     
@@ -339,7 +341,7 @@ export class ScheduleController {
   }
 
   /**
-   * 3. 복용 완료 처리 (실제 DB 저장)
+   * 🔥 새로 추가: 복용 완료 처리
    */
   @Post('completion')
   async completeDose(
@@ -351,24 +353,35 @@ export class ScheduleController {
       notes?: string;
     }
   ) {
-    console.log(`🔥 [Controller] 복용 완료 요청:`, body);
+    console.log('🔥 [Controller] 복용 완료 처리:', body);
     
-    const result = await this.scheduleService.completeDose(
-      body.medicineId,
-      body.userId,
-      body.timeOfDay,
-      body.actualDose,
-      body.notes
-    );
-    
-    return {
-      success: result.success,
-      message: result.message
-    };
+    try {
+      const result = await this.scheduleService.completeDose(
+        body.medicineId,
+        body.userId,
+        body.timeOfDay,
+        body.actualDose,
+        body.notes
+      );
+      
+      return {
+        success: true,
+        message: '복용이 완료되었습니다.',
+        data: result
+      };
+    } catch (error) {
+      console.error('🔥 [Controller] 복용 완료 처리 실패:', error);
+      return {
+        success: false,
+        error: {
+          message: error.message || '복용 완료 처리 중 오류가 발생했습니다.'
+        }
+      };
+    }
   }
 
   /**
-   * 🔥 새로 추가: 복용 기록 조회
+   * 🔥 새로 추가: 복용 기록 조회 (medicineId/userId 파라미터 방식)
    */
   @Get('dose-history/:medicineId/:userId')
   async getDoseHistory(
@@ -376,32 +389,52 @@ export class ScheduleController {
     @Param('userId') userId: string,
     @Query('date') date?: string,
   ) {
-    console.log(`🔍 [Controller] 복용 기록 조회: medicineId=${medicineId}, userId=${userId}, date=${date}`);
+    console.log('🔥 [Controller] 복용 기록 조회:', { medicineId, userId, date });
     
-    const result = await this.scheduleService.getDoseHistory(medicineId, userId, date);
-    
-    return {
-      success: true,
-      data: result
-    };
+    try {
+      const result = await this.scheduleService.getDoseHistory(medicineId, userId, date);
+      
+      return {
+        success: true,
+        data: result
+      };
+    } catch (error) {
+      console.error('🔥 [Controller] 복용 기록 조회 실패:', error);
+      return {
+        success: false,
+        error: {
+          message: error.message || '복용 기록 조회 중 오류가 발생했습니다.'
+        }
+      };
+    }
   }
 
   /**
-   * 🔥 새로 추가: 주간 통계 조회
+   * 🔥 새로 추가: 주간 통계 조회 (userId 파라미터 방식)
    */
   @Get('weekly-stats/:userId')
   async getWeeklyStats(
     @Param('userId') userId: string,
     @Query('medicineId') medicineId?: string,
   ) {
-    console.log(`🔍 [Controller] 주간 통계 조회: userId=${userId}, medicineId=${medicineId}`);
+    console.log('🔥 [Controller] 주간 통계 조회:', { userId, medicineId });
     
-    const result = await this.scheduleService.getWeeklyStats(userId, medicineId);
-    
-    return {
-      success: true,
-      data: result
-    };
+    try {
+      const result = await this.scheduleService.getWeeklyStats(userId, medicineId);
+      
+      return {
+        success: true,
+        data: result
+      };
+    } catch (error) {
+      console.error('🔥 [Controller] 주간 통계 조회 실패:', error);
+      return {
+        success: false,
+        error: {
+          message: error.message || '주간 통계 조회 중 오류가 발생했습니다.'
+        }
+      };
+    }
   }
 
   /**
@@ -417,6 +450,15 @@ export class ScheduleController {
    */
   @Get('family-summary')
   async getFamilyMedicineSummary(@Query('connect') connect: string) {
+    return this.scheduleService.getFamilySummary(connect);
+  }
+
+  /**
+   * 🔥 호환성 추가: 가족별 복용 요약 조회 - 프론트엔드 호환 경로 (슬래시 포함)
+   */
+  @Get('family/summary')
+  async getFamilyMedicineSummaryCompat(@Query('connect') connect: string) {
+    console.log('🔥 [Controller] 프론트엔드 호환 가족 요약 조회:', connect);
     return this.scheduleService.getFamilySummary(connect);
   }
 

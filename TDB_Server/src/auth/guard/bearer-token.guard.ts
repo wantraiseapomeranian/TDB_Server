@@ -12,7 +12,7 @@ import { User } from '../../users/entities/users.entity';
 interface AuthenticatedRequest extends Request {
   user: User;
   token: string;
-  tokenType: 'access' | 'refresh';
+  tokenType: 'access' | 'refresh' | 'device';
 }
 
 @Injectable()

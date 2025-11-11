@@ -5,41 +5,112 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User, UserRole } from './entities/users.entity';
+import { User } from './entities/users.entity';
+import { UserRole } from './entities/user-role.enum';
+import { UserGroup } from './entities/user-group.entity';
+import { UserGroupMembership } from './entities/user-group-membership.entity';
 import { Machine } from '../machine/entities/machine.entity';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(UserGroup)
+    private readonly userGroupRepository: Repository<UserGroup>,
+    @InjectRepository(UserGroupMembership)
+    private readonly membershipRepository: Repository<UserGroupMembership>,
     @InjectRepository(Machine)
     private readonly machineRepository: Repository<Machine>,
   ) {}
 
-  /**
-   * 유저 생성
-   */
-  async createUser(user: Partial<User>): Promise<User> {
-    console.log('[UsersService] 회원가입 요청됨:', user);
+  async resolveRfid(uid: string) {
+    // 1. DB의 'k_uid' 컬럼에서 전달받은 uid와 일치하는 사용자를 찾습니다.
+    const user = await this.usersRepository.findOne({ where: { k_uid: uid } });
 
-    const existing = await this.usersRepository.findOne({
+    // 2. 사용자를 찾지 못했다면, 미등록 키트 응답을 반환합니다.
+    if (!user) {
+      return {
+        registered: false,
+        register_url: `https://app.example.com/kit/register?uid=${uid}`,
+      };
+    }
+    
+    // 3. 사용자를 찾았다면, 해당 유저의 그룹 정보를 찾습니다.
+    const membership = await this.membershipRepository.findOne({
       where: { user_id: user.user_id },
     });
+    
+    // 4. 명세에 맞는 최종 응답을 반환합니다.
+    return {
+      registered: true,
+      user_id: user.user_id,
+      group_id: membership ? membership.group_id : null, // 멤버십이 없을 경우 null 처리
+      took_today: user.took_today,
+    };
+  }
 
-    if (existing) {
-      console.warn('[UsersService] 이미 존재하는 ID:', user.user_id);
-      throw new BadRequestException('이미 사용 중인 ID입니다.');
+  /**
+   * 새로운 사용자 생성 (그룹 및 멤버십 포함)
+   */
+  async createUser(userData: Partial<User>, role: UserRole = UserRole.CHILD, parentUserId?: string): Promise<User> {
+    console.log('[UsersService] 새 사용자 생성 시작:', userData);
+
+    // 1. 사용자 생성
+    const newUser = this.usersRepository.create({
+      user_id: userData.user_id,
+      password: userData.password,
+      name: userData.name,
+      age: userData.age,
+      birthDate: userData.birthDate,
+      k_uid: userData.k_uid,
+      refresh_token: userData.refresh_token,
+    });
+
+    const savedUser = await this.usersRepository.save(newUser);
+
+    // 2. 그룹 처리
+    let group: UserGroup;
+    
+    if (role === UserRole.PARENT) {
+      // 부모인 경우 새 그룹 생성
+      group = this.userGroupRepository.create({
+        group_id: randomUUID(),
+        group_name: `${savedUser.name}의 가족`,
+        parent_user_id: savedUser.user_id,
+        note: '자동 생성된 가족 그룹'
+      });
+      group = await this.userGroupRepository.save(group);
+    } else {
+      // 자녀인 경우 부모의 그룹에 참여
+      if (!parentUserId) {
+        throw new BadRequestException('자녀 계정 생성 시 부모 ID가 필요합니다.');
+      }
+      
+      const parentMembership = await this.membershipRepository.findOne({
+        where: { user_id: parentUserId, role: UserRole.PARENT },
+        relations: ['group']
+      });
+      
+      if (!parentMembership) {
+        throw new NotFoundException('부모 계정의 그룹을 찾을 수 없습니다.');
+      }
+      
+      group = parentMembership.group;
     }
 
-    const newUser = this.usersRepository.create(user);
-    const saved = await this.usersRepository.save(newUser);
-    console.log('[UsersService] 저장 완료:', saved);
+    // 3. 멤버십 생성
+    const membership = this.membershipRepository.create({
+      group_id: group.group_id,
+      user_id: savedUser.user_id,
+      role: role
+    });
+    await this.membershipRepository.save(membership);
 
-    // 🔥 Machine 레코드는 약 추가 시에 슬롯별로 생성됩니다.
-    // 회원가입 시에는 불필요한 Machine 레코드를 생성하지 않습니다.
-
-    return saved;
+    console.log(`[UsersService] 사용자 생성 완료: ${savedUser.user_id} (${role}) → 그룹: ${group.group_id}`);
+    
+    return savedUser;
   }
 
   /**
@@ -64,22 +135,61 @@ export class UsersService {
   }
 
   /**
-   * 머신 UID로 유저 조회
+   * 사용자의 그룹 정보 조회
    */
-  async getUserByMachineUid(m_uid: string): Promise<User | null> {
-    return this.usersRepository.findOne({ where: { m_uid } });
+  async getUserWithGroup(userId: string): Promise<{ user: User; group: UserGroup; membership: UserGroupMembership }> {
+    const user = await this.getUserById(userId);
+    if (!user) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    }
+
+    const membership = await this.membershipRepository.findOne({
+      where: { user_id: userId },
+      relations: ['group']
+    });
+
+    if (!membership) {
+      throw new NotFoundException('사용자의 그룹 정보를 찾을 수 없습니다.');
+    }
+
+    return { user, group: membership.group, membership };
+  }
+
+  /**
+   * 그룹의 모든 멤버 조회
+   */
+  async getGroupMembers(groupId: string): Promise<{ user: User; membership: UserGroupMembership }[]> {
+    const memberships = await this.membershipRepository.find({
+      where: { group_id: groupId },
+      relations: ['user']
+    });
+
+    return memberships.map(membership => ({
+      user: membership.user,
+      membership
+    }));
   }
 
   /**
    * 부모 ID 기준 자식 계정 목록 조회
    */
   async getChildrenOfParent(parentUserId: string): Promise<User[]> {
-    return this.usersRepository.find({
-      where: {
-        connect: parentUserId,
-        role: UserRole.CHILD,
-      },
+    // 1. 부모의 그룹 찾기
+    const parentMembership = await this.membershipRepository.findOne({
+      where: { user_id: parentUserId, role: UserRole.PARENT }
     });
+
+    if (!parentMembership) {
+      throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
+    }
+
+    // 2. 같은 그룹의 자녀들 찾기
+    const childMemberships = await this.membershipRepository.find({
+      where: { group_id: parentMembership.group_id, role: UserRole.CHILD },
+      relations: ['user']
+    });
+
+    return childMemberships.map(membership => membership.user);
   }
 
   /**
@@ -102,53 +212,42 @@ export class UsersService {
   }
 
   /**
-   * 🔥 디스펜서 등록 (m_uid 업데이트만, max_slot 기본 3개 고정)
+   * 🔥 디스펜서 등록 (Machine 테이블에 등록)
    */
-  async registerDispenser(userId: string, m_uid: string): Promise<User> {
-    const user = await this.getUserById(userId);
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
+  async registerDispenser(userId: string, machine_id: string): Promise<{ message: string; machine: Machine }> {
+    const { user, group, membership } = await this.getUserWithGroup(userId);
 
     // 부모 계정만 기기 등록 가능
-    if (user.role !== UserRole.PARENT) {
+    if (membership.role !== UserRole.PARENT) {
       throw new BadRequestException('메인 계정만 디스펜서를 등록할 수 있습니다.');
     }
 
-    // connect가 없으면 에러
-    if (!user.connect) {
-      throw new BadRequestException('사용자의 connect 정보가 없습니다.');
-    }
-
-    // 이미 다른 사용자가 해당 m_uid를 사용 중인지 확인
-    const existingUser = await this.usersRepository.findOne({ 
-      where: { m_uid },
+    // 이미 등록된 기기인지 확인
+    const existingMachine = await this.machineRepository.findOne({
+      where: { machine_id: machine_id }
     });
-    
-    if (existingUser && existingUser.connect !== user.connect) {
+
+    if (existingMachine) {
       throw new BadRequestException('이미 등록된 디스펜서입니다.');
     }
 
-    // 🔥 같은 connect 그룹의 모든 사용자 m_uid 업데이트
-    const allUsersInGroup = await this.usersRepository.find({
-      where: { connect: user.connect }
+    // 새 기기 등록
+    const newMachine = this.machineRepository.create({
+      machine_id: machine_id,
+      group_id: group.group_id,
+      max_slot: 3, // 기본 3슬롯
+      error_status: null,
+      last_error_at: null
     });
 
-    for (const groupUser of allUsersInGroup) {
-      groupUser.m_uid = m_uid;
-      await this.usersRepository.save(groupUser);
-    }
+    const savedMachine = await this.machineRepository.save(newMachine);
+
+    console.log(`[UsersService] 디스펜서 등록 완료: ${machine_id} → 그룹: ${group.group_id}`);
     
-    console.log(`[UsersService] 디스펜서 등록 완료: connect ${user.connect} 그룹 전체 → ${m_uid}`);
-    console.log(`[UsersService] 업데이트된 사용자 수: ${allUsersInGroup.length}명`);
-    console.log(`[UsersService] Machine 테이블 레코드는 약 추가 시 슬롯별로 생성됩니다.`);
-    
-    // 업데이트된 부모 계정 정보 반환
-    const updatedUser = await this.getUserById(userId);
-    if (!updatedUser) {
-      throw new NotFoundException('업데이트된 사용자 정보를 찾을 수 없습니다.');
-    }
-    return updatedUser;
+    return {
+      message: '디스펜서가 성공적으로 등록되었습니다.',
+      machine: savedMachine
+    };
   }
 
   /**
@@ -178,57 +277,35 @@ export class UsersService {
   }
 
   /**
-   * 🔥 디스펜서 정보 조회 (max_slot 기본 3개 고정)
+   * 🔥 디스펜서 정보 조회
    */
-  async getDispenserInfo(userId: string): Promise<{ m_uid: string | null; max_slot: number }> {
-    const user = await this.getUserById(userId);
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
+  async getDispenserInfo(userId: string): Promise<{ machines: Machine[]; group_id: string }> {
+    const { group } = await this.getUserWithGroup(userId);
 
-    console.log(`[UsersService] 디스펜서 정보 조회: userId=${userId}, m_uid=${user.m_uid}, max_slot=3 (고정)`);
+    const machines = await this.machineRepository.find({
+      where: { group_id: group.group_id }
+    });
+
+    console.log(`[UsersService] 디스펜서 정보 조회: userId=${userId}, 그룹=${group.group_id}, 기기 수=${machines.length}`);
     
     return {
-      m_uid: user.m_uid,
-      max_slot: 3 // 항상 3개로 고정
+      machines,
+      group_id: group.group_id
     };
   }
 
   /**
-   * 🔥 가족 구성원들의 m_uid 동기화 (기존 데이터 수정용)
+   * 그룹 정보 조회
    */
-  async syncFamilyMuid(connect: string): Promise<{ updatedCount: number; m_uid: string | null }> {
-    // 해당 connect 그룹의 모든 사용자 조회
-    const allUsersInGroup = await this.usersRepository.find({
-      where: { connect }
+  async getGroupInfo(groupId: string): Promise<UserGroup> {
+    const group = await this.userGroupRepository.findOne({
+      where: { group_id: groupId }
     });
 
-    if (allUsersInGroup.length === 0) {
-      throw new NotFoundException('해당 connect를 가진 사용자를 찾을 수 없습니다.');
+    if (!group) {
+      throw new NotFoundException('그룹을 찾을 수 없습니다.');
     }
 
-    // 부모 계정의 m_uid를 기준으로 동기화
-    const parentUser = allUsersInGroup.find(user => user.role === UserRole.PARENT);
-    if (!parentUser) {
-      throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
-    }
-
-    const targetMuid = parentUser.m_uid;
-    let updatedCount = 0;
-
-    // 모든 가족 구성원의 m_uid를 부모와 동일하게 설정
-    for (const user of allUsersInGroup) {
-      if (user.m_uid !== targetMuid) {
-        user.m_uid = targetMuid;
-        await this.usersRepository.save(user);
-        updatedCount++;
-      }
-    }
-
-    console.log(`[UsersService] 가족 m_uid 동기화 완료: connect ${connect}`);
-    console.log(`[UsersService] 대상 m_uid: ${targetMuid}`);
-    console.log(`[UsersService] 업데이트된 사용자 수: ${updatedCount}명`);
-
-    return { updatedCount, m_uid: targetMuid };
+    return group;
   }
 }

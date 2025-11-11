@@ -18,4 +18,5 @@ export class SignupDto {
   role?: 'parent' | 'child';
   @IsOptional() @IsString() uuid?: string;
   @IsOptional() @IsString() parentUuid?: string;
+  @IsOptional() @IsString() groupName?: string;
 }

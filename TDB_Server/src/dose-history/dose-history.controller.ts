@@ -171,4 +171,44 @@ export class DoseHistoryController {
       };
     }
   }
+
+  /**
+   * 🔥 호환성 추가: 복용 완료 처리 - 프론트엔드 호환 경로
+   */
+  @Post()
+  async completeDoseCompat(@Body() completeDoseDto: CompleteDoseDto) {
+    return this.completeDose(completeDoseDto);
+  }
+
+  /**
+   * 🔥 호환성 추가: 사용자 복용 기록 조회 - 프론트엔드 호환 경로
+   */
+  @Get('user/:user_id')
+  async getDoseHistoryCompat(
+    @Param('user_id') user_id: string,
+    @Query('medi_id') medi_id?: string,
+    @Query('start_date') start_date?: string,
+    @Query('end_date') end_date?: string,
+  ) {
+    return this.getDoseHistory(user_id, medi_id, start_date, end_date);
+  }
+
+  /**
+   * 🔥 호환성 추가: 주간 통계 조회 - 프론트엔드 호환 경로
+   */
+  @Get('statistics/:user_id')
+  async getWeeklyStatsCompat(
+    @Param('user_id') user_id: string,
+    @Query('start_date') start_date: string,
+  ) {
+    return this.getWeeklyStats(user_id, start_date);
+  }
+
+  /**
+   * 🔥 호환성 추가: 복용 완료 처리 - 프론트엔드 taken 경로
+   */
+  @Post('taken')
+  async completeDoseTaken(@Body() completeDoseDto: CompleteDoseDto) {
+    return this.completeDose(completeDoseDto);
+  }
 } 

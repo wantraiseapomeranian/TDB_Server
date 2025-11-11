@@ -1,15 +1,29 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Schedule } from './entities/schedule.entity';
-import { DoseHistory } from '../dose-history/dose-history.entity';
-import { User } from 'src/users/entities/users.entity';
-import { Medicine } from 'src/medicine/entities/medicine.entity';
-import { Machine } from 'src/machine/entities/machine.entity';
-import { UserRole } from 'src/users/entities/users.entity';
-import { randomUUID } from 'crypto';
+import { Schedule, DayOfWeek, TimeOfDay } from './entities/schedule.entity';
+import { DoseHistory, DoseStatus } from '../dose-history/dose-history.entity';
+import { Medicine } from '../shared/entities/medicine.entity';
+import { User } from '../users/entities/users.entity';
+import { UserGroup } from '../users/entities/user-group.entity';
+import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
+import { Machine } from '../machine/entities/machine.entity';
+import { MachineSlot } from '../machine/entities/machine-slot.entity';
+import { UserRole } from '../users/entities/user-role.enum';
 import { DoseHistoryService } from '../dose-history/dose-history.service';
-import { AgeValidationService, AgeValidationResult } from '../validation/age-validation.service';
+import { AgeValidationService } from '../validation/age-validation.service';
+import { randomUUID } from 'crypto';
+
+interface AgeValidationResult {
+  allowed: boolean;
+  reason?: string;
+  warnings?: string[];
+}
 
 @Injectable()
 export class ScheduleService {
@@ -22,13 +36,38 @@ export class ScheduleService {
     private readonly medicineRepo: Repository<Medicine>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(UserGroup)
+    private readonly userGroupRepo: Repository<UserGroup>,
+    @InjectRepository(UserGroupMembership)
+    private readonly membershipRepo: Repository<UserGroupMembership>,
     @InjectRepository(Machine)
     private readonly machineRepo: Repository<Machine>,
+    @InjectRepository(MachineSlot)
+    private readonly machineSlotRepo: Repository<MachineSlot>,
     private readonly doseHistoryService: DoseHistoryService,
     private readonly ageValidationService: AgeValidationService,
   ) {}
 
-  // 🔥 V3: 매트릭스 스케줄 저장 (요일×시간별 개별 복용량)
+  // 사용자의 그룹 정보 조회 헬퍼 메서드
+  private async getUserGroup(userId: string): Promise<{ user: User; group: UserGroup; membership: UserGroupMembership }> {
+    const user = await this.userRepo.findOne({ where: { user_id: userId } });
+    if (!user) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    }
+
+    const membership = await this.membershipRepo.findOne({
+      where: { user_id: userId },
+      relations: ['group']
+    });
+
+    if (!membership) {
+      throw new NotFoundException('사용자의 그룹 정보를 찾을 수 없습니다.');
+    }
+
+    return { user, group: membership.group, membership };
+  }
+
+  // 매트릭스 스케줄 저장 (새로운 그룹 기반)
   async saveMatrixSchedule(
     medicineId: string,
     memberId: string,
@@ -39,135 +78,195 @@ export class ScheduleService {
       enabled: boolean;
     }>,
     totalQuantity: string = '1',
-    requestUserId?: string  // 🔥 요청자 정보 추가
+    requestUserId?: string
   ) {
-    console.log(`🔥 [Service V3] 매트릭스 스케줄 저장: ${medicineId}/${memberId}`);
-    console.log(`🔥 [Service V3] 스케줄 항목 ${scheduleItems.length}개:`, scheduleItems);
-
     try {
-      // 사용자 조회
-      const user = await this.userRepo.findOne({ where: { user_id: memberId } });
-      if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-      if (!user.connect) throw new NotFoundException('사용자의 connect 정보가 없습니다.');
+      console.log(`🔥 [ScheduleService] 매트릭스 스케줄 저장 시작: ${medicineId}/${memberId}`);
 
-      // 약물 조회
-      const medicine = await this.medicineRepo.findOne({
-        where: { medi_id: medicineId, connect: user.connect! },
-      });
-      if (!medicine) throw new NotFoundException('약 정보를 찾을 수 없습니다.');
-
-      // 🔥 실제 요청한 사용자 정보 조회 (부모가 자식 관리하는지 확인용)
-      let requestUser: User | null = null;
+      // 1. 사용자 그룹 정보 조회
+      const { user, group, membership } = await this.getUserGroup(memberId);
+      
+      // 2. 요청자 그룹 정보 조회 (권한 확인용)
+      let requestMembership: UserGroupMembership | null = null;
       if (requestUserId && requestUserId !== memberId) {
-        requestUser = await this.userRepo.findOne({ where: { user_id: requestUserId } });
-        console.log(`🔥 [Service V3] 요청자와 대상자가 다름 - 요청자: ${requestUserId}, 대상자: ${memberId}`);
-        console.log(`🔥 [Service V3] 요청자 정보:`, requestUser ? { role: requestUser.role, name: requestUser.name } : '없음');
+        requestMembership = await this.membershipRepo.findOne({
+          where: { user_id: requestUserId },
+          relations: ['user']
+        });
       }
 
-      // 기존 스케줄 삭제
-      await this.scheduleRepo.delete({
-        user_id: user.user_id,
-        medi_id: medicine.medi_id,
+      // 3. 약물 정보 조회 (그룹 기반)
+      const medicine = await this.medicineRepo.findOne({
+        where: { medi_id: medicineId, group_id: group.group_id }
       });
 
-      // 새로운 매트릭스 스케줄 생성
-      const newSchedules: Schedule[] = [];
-      
-      for (const item of scheduleItems) {
-        console.log(`🔥 [Service V3] 스케줄 생성: ${item.day_of_week} ${item.time_of_day}, dose=${item.dose_count}`);
-        
-        const schedule = new Schedule();
-        schedule.schedule_id = randomUUID();
-        schedule.user_id = user.user_id;
-        schedule.medi_id = medicine.medi_id;
-        schedule.connect = user.connect!;
-        schedule.day_of_week = item.day_of_week as any;
-        schedule.time_of_day = item.time_of_day as any;
-        schedule.dose = item.dose_count;
-        schedule.created_at = new Date();
-        
-        newSchedules.push(schedule);
+      if (!medicine) {
+        throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
       }
 
-      // 스케줄 저장
-      const savedSchedules = await this.scheduleRepo.save(newSchedules);
-      console.log(`🔥 [Service V3] ${savedSchedules.length}개 스케줄 저장 완료`);
-
-      // 🔥 totalQuantity 업데이트 (Machine 테이블) - 부모/자녀 구분 로직 추가
-      const isParentManagingChild = requestUser && requestUser.role === UserRole.PARENT && requestUser.user_id !== memberId;
-      
-      const parsedTotalQuantity = Number(totalQuantity);
-      if (parsedTotalQuantity > 0) {
-        console.log(`🔥 [Service V3] Machine 테이블 업데이트 시도 - parsedTotalQuantity: ${parsedTotalQuantity}, isParentManagingChild: ${isParentManagingChild}`);
-        
-        if (isParentManagingChild) {
-          console.log(`🔥 [Service V3] 🚨 부모가 자식 스케줄 관리 중 - totalQuantity 값이 유효하지 않을 수 있음. 기존 Machine 값 유지`);
-          
-          // 부모가 자녀 스케줄 관리할 때는 totalQuantity를 무조건 믿지 말고 기존 값 확인
-          const machineRecord = await this.machineRepo.findOne({
-            where: { 
-              medi_id: medicine.medi_id,
-              owner: user.connect! 
-            }
-          });
-          
-          if (machineRecord && machineRecord.total > parsedTotalQuantity) {
-            console.log(`🔥 [Service V3] 기존 Machine total(${machineRecord.total})이 더 크므로 업데이트 건너뜀`);
-          } else if (machineRecord) {
-            console.log(`🔥 [Service V3] 기존 Machine total(${machineRecord.total})보다 크거나 같으므로 업데이트 진행`);
-            machineRecord.total = parsedTotalQuantity;
-            machineRecord.remain = parsedTotalQuantity;
-            await this.machineRepo.save(machineRecord);
-            console.log(`🔥 [Service V3] Machine 업데이트 완료: total=${machineRecord.total}`);
-          }
-        } else {
-          console.log(`🔥 [Service V3] ✅ 본인 스케줄 관리 - Machine 테이블 업데이트 진행`);
-          
-          let machineRecord = await this.machineRepo.findOne({
-            where: { 
-              medi_id: medicine.medi_id,
-              owner: user.connect! 
-            }
-          });
-          
-          if (machineRecord) {
-            machineRecord.total = parsedTotalQuantity;
-            machineRecord.remain = parsedTotalQuantity;
-            await this.machineRepo.save(machineRecord);
-            console.log(`🔥 [Service V3] Machine 업데이트 완료: total=${machineRecord.total}`);
-          }
+      // 4. 기존 스케줄 조회 (삭제 전에 어떤 시간대가 있었는지 파악)
+      const oldSchedules = await this.scheduleRepo.find({
+        where: {
+          medi_id: medicineId,
+          user_id: memberId,
+          group_id: group.group_id
         }
-      } else {
-        console.log(`🔥 [Service V3] Machine 테이블 업데이트 건너뜀 - parsedTotalQuantity: ${parsedTotalQuantity} (유효하지 않음)`);
+      });
+
+      // 5. 기존 스케줄 삭제
+      await this.scheduleRepo.delete({
+        medi_id: medicineId,
+        user_id: memberId,
+        group_id: group.group_id
+      });
+
+      // 6. 새로운 스케줄 생성
+      const newSchedules = scheduleItems
+        .filter(item => item.enabled)
+        .map(item => {
+          return this.scheduleRepo.create({
+            schedule_id: randomUUID(),
+            group_id: group.group_id,
+            medi_id: medicineId,
+            user_id: memberId,
+            day_of_week: item.day_of_week as DayOfWeek,
+            time_of_day: item.time_of_day as TimeOfDay,
+            dose: item.dose_count,
+            created_at: new Date(),
+          });
+        });
+
+      const savedSchedules = await this.scheduleRepo.save(newSchedules);
+      console.log(`🔥 [ScheduleService] ${savedSchedules.length}개 스케줄 저장 완료`);
+
+      // 🔥 7. 오늘 날짜의 불필요한 복용 기록 정리
+      // 새 스케줄에서 제거된 시간대의 복용 기록을 삭제
+      const today = new Date().toISOString().split('T')[0];
+      const currentDayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+      
+      // 기존 스케줄 중 오늘 요일의 시간대 목록
+      const oldTimeSlotsForToday = oldSchedules
+        .filter(s => s.day_of_week === currentDayOfWeek)
+        .map(s => s.time_of_day);
+      
+      // 새 스케줄 중 오늘 요일의 시간대 목록
+      const newTimeSlotsForToday = savedSchedules
+        .filter(s => s.day_of_week === currentDayOfWeek)
+        .map(s => s.time_of_day);
+      
+      // 제거된 시간대 파악 (기존에는 있었지만 새로 저장된 스케줄에는 없는 시간대)
+      const removedTimeSlots = oldTimeSlotsForToday.filter(
+        timeSlot => !newTimeSlotsForToday.includes(timeSlot)
+      );
+      
+      // 제거된 시간대의 오늘 복용 기록 삭제
+      if (removedTimeSlots.length > 0) {
+        console.log(`🔥 [ScheduleService] 오늘(${currentDayOfWeek}) 제거된 시간대의 복용 기록 삭제:`, {
+          medicineId,
+          memberId,
+          today,
+          removedTimeSlots
+        });
+        
+        for (const timeSlot of removedTimeSlots) {
+          await this.doseHistoryRepo.delete({
+            medi_id: medicineId,
+            user_id: memberId,
+            dose_date: today as any,
+            time_of_day: timeSlot
+          });
+        }
+        
+        console.log(`✅ [ScheduleService] ${removedTimeSlots.length}개 시간대의 복용 기록 삭제 완료`);
       }
+
+      // 6. MachineSlot 업데이트 (totalQuantity가 있는 경우)
+      await this.updateMachineSlotQuantity(group.group_id, medicineId, totalQuantity, requestMembership);
 
       return {
         success: true,
         message: '매트릭스 스케줄이 성공적으로 저장되었습니다.',
         data: {
           savedCount: savedSchedules.length,
-          schedules: savedSchedules
+          schedules: savedSchedules,
         }
       };
-      
+
     } catch (error) {
-      console.error('🔥 [Service V3] 매트릭스 스케줄 저장 실패:', error);
+      console.error('🔥 [ScheduleService] 매트릭스 스케줄 저장 실패:', error);
       throw error;
     }
   }
 
-  // 1. 스케줄 저장 (유효성 검사 포함)
+  // MachineSlot 수량 업데이트 헬퍼 메서드
+  private async updateMachineSlotQuantity(
+    groupId: string, 
+    mediId: string, 
+    totalQuantity: string, 
+    requestMembership?: UserGroupMembership | null
+  ) {
+    // totalQuantity 파싱
+    let parsedQuantity = 0;
+    if (totalQuantity && totalQuantity.trim() !== '') {
+      const cleanedQuantity = totalQuantity.replace(/[#]/g, '');
+      parsedQuantity = Number(cleanedQuantity);
+    }
+
+    if (parsedQuantity <= 0) {
+      console.log(`[ScheduleService] totalQuantity가 유효하지 않음: ${totalQuantity}`);
+      return;
+    }
+
+    // 권한 확인 (부모만 수량 업데이트 가능)
+    if (requestMembership && requestMembership.role !== UserRole.PARENT) {
+      console.log(`[ScheduleService] 권한 없음: ${requestMembership.role} (부모만 수량 설정 가능)`);
+      return;
+    }
+
+    try {
+      // 해당 그룹의 기계들 조회
+      const machines = await this.machineRepo.find({
+        where: { group_id: groupId }
+      });
+
+      if (machines.length === 0) {
+        console.log(`[ScheduleService] 그룹 ${groupId}에 등록된 기계가 없음`);
+        return;
+      }
+
+      // 각 기계에서 해당 약물의 슬롯 찾기
+      for (const machine of machines) {
+        const machineSlot = await this.machineSlotRepo.findOne({
+          where: { machine_id: machine.machine_id, medi_id: mediId }
+        });
+
+        if (machineSlot) {
+          // 기존 슬롯 업데이트
+          machineSlot.total = parsedQuantity;
+          machineSlot.remain = parsedQuantity;
+          await this.machineSlotRepo.save(machineSlot);
+          console.log(`[ScheduleService] 슬롯 업데이트: ${machine.machine_id} - ${mediId}, total=${parsedQuantity}`);
+          break; // 첫 번째 슬롯만 업데이트
+        }
+      }
+
+    } catch (error) {
+      console.error('[ScheduleService] MachineSlot 업데이트 오류:', error);
+    }
+  }
+
+  // 기본 스케줄 저장
   async saveSchedule(
     medicineId: string,
     memberId: string,
-    scheduleData: any, // Record<string, unknown>에서 any로 변경
+    scheduleData: any,
     totalQuantity?: string,
     doseCount?: string,
-    requestUserId?: string, // 🔥 실제 요청한 사용자 ID 추가
+    requestUserId?: string,
   ) {
-    console.log('저장할 스케줄 데이터:', { medicineId, memberId, scheduleData, totalQuantity, doseCount, requestUserId });
+    console.log('[ScheduleService] 스케줄 저장:', { medicineId, memberId, scheduleData, totalQuantity });
 
-    // 🔥 1단계: 사용자 연령 기반 유효성 검사
+    // 나이 유효성 검사
     const validationResult = await this.validateUserAge(memberId, medicineId);
     if (!validationResult.allowed) {
       throw new BadRequestException({
@@ -177,376 +276,60 @@ export class ScheduleService {
       });
     }
 
-    // 배열 형태의 스케줄 데이터 처리
+    // 배열 형태 스케줄 데이터 처리
     if (Array.isArray(scheduleData)) {
-      console.log('배열 형태의 스케줄 데이터:', scheduleData);
-      
-      const user = await this.userRepo.findOne({ where: { user_id: memberId } });
-      if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-      if (!user.connect) throw new NotFoundException('사용자의 connect 정보가 없습니다.');
-
-      // 🔥 실제 요청한 사용자 정보 조회 (부모가 자식 관리하는지 확인용)
-      let requestUser: User | null = null;
-      if (requestUserId && requestUserId !== memberId) {
-        requestUser = await this.userRepo.findOne({ where: { user_id: requestUserId } });
-        console.log(`[ScheduleService] 요청자와 대상자가 다름 - 요청자: ${requestUserId}, 대상자: ${memberId}`);
-        console.log(`[ScheduleService] 요청자 정보:`, requestUser ? { role: requestUser.role, name: requestUser.name } : '없음');
-      }
-
-      const medicine = await this.medicineRepo.findOne({
-        where: { medi_id: medicineId, connect: user.connect! },
-      });
-      if (!medicine) throw new NotFoundException('약 정보를 찾을 수 없습니다.');
-
-      // 기존 스케줄 삭제
-      await this.scheduleRepo.delete({
-        user_id: user.user_id,
-        medi_id: medicine.medi_id,
-      });
-
-      // 🔥 총량/복용량 업데이트 - Machine 테이블에서 해당 약의 슬롯 찾기
-      // totalQuantity가 명시적으로 전달되고 유효한 값일 때만 Machine 테이블 업데이트
-      // 🚨 중요: 부모가 자식 스케줄을 관리할 때는 totalQuantity 업데이트 금지
-      const isParentManagingChild = requestUser && requestUser.role === UserRole.PARENT && requestUser.user_id !== memberId;
-      const isParentUser = requestUser ? requestUser.role === UserRole.PARENT : user.role === UserRole.PARENT;
-      
-      // 🔥 totalQuantity 파싱 로직 개선 - "9#99" 같은 형식도 처리
-      let parsedTotalQuantity = 0;
-      if (totalQuantity && totalQuantity.trim() !== '') {
-        // "#" 문자를 제거하고 숫자 부분만 추출
-        const cleanedQuantity = totalQuantity.replace(/[#]/g, '');
-        parsedTotalQuantity = Number(cleanedQuantity);
-        console.log(`[ScheduleService] totalQuantity 파싱: "${totalQuantity}" → "${cleanedQuantity}" → ${parsedTotalQuantity}`);
-      }
-      
-      if (parsedTotalQuantity > 0) {
-        console.log(`[ScheduleService] Machine 테이블 업데이트 시도 - parsedTotalQuantity: ${parsedTotalQuantity}, user_role: ${user.role}, memberId: ${memberId}`);
-        console.log(`[ScheduleService] 요청자 분석: isParentManagingChild=${isParentManagingChild}`);
-        
-        console.log(`[ScheduleService] 🔥 Machine 테이블 업데이트 진행 - isParentManagingChild: ${isParentManagingChild}`);
-        
-        let machineRecord = await this.machineRepo.findOne({
-          where: { 
-            medi_id: medicine.medi_id,
-            owner: user.connect! 
-          }
-        });
-        
-        if (machineRecord) {
-          // 기존 Machine 레코드 업데이트
-          machineRecord.total = parsedTotalQuantity;
-          machineRecord.remain = parsedTotalQuantity;
-          await this.machineRepo.save(machineRecord);
-          console.log(`[ScheduleService] 기존 Machine 업데이트: total=${machineRecord.total}, remain=${machineRecord.remain}`);
-        } else {
-          // 🔥 Machine 레코드가 없으면 새로 생성
-          console.log(`[ScheduleService] Machine 레코드가 없어서 새로 생성: medi_id=${medicine.medi_id}, owner=${user.connect}`);
-          
-          // 부모 계정의 m_uid 조회
-          const parentUser = await this.userRepo.findOne({
-            where: { connect: user.connect!, role: UserRole.PARENT },
-            select: ['m_uid']
-          });
-          
-          if (parentUser?.m_uid) {
-            // 사용 중인 슬롯 조회 (복합키 구조에 맞게 수정)
-            const usedMachines = await this.machineRepo.find({
-              where: { owner: user.connect! },
-              select: ['machine_id', 'slot']
-            });
-            const usedSlots = usedMachines.map(m => m.slot).filter(slot => slot !== null);
-            
-            // 빈 슬롯 찾기 (1번부터)
-            let assignedSlot = 1;
-            while (usedSlots.includes(assignedSlot) && assignedSlot <= 6) {
-              assignedSlot++;
-            }
-            
-            if (assignedSlot <= 6) {
-              // 🔥 Foreign Key 제약 조건 수정: machine_id는 실제 m_uid 사용
-              const newMachine = this.machineRepo.create({
-                machine_id: parentUser.m_uid, // 🔥 실제 m_uid 사용 (Foreign Key 만족)
-                medi_id: medicine.medi_id,
-                owner: user.connect!,
-                slot: assignedSlot, // 🔥 슬롯 정보는 별도 필드에 저장
-                total: parsedTotalQuantity,
-                remain: parsedTotalQuantity,
-                error_status: '',
-                last_error_at: new Date()
-              });
-              
-              await this.machineRepo.save(newMachine);
-              console.log(`[ScheduleService] 새 Machine 레코드 생성: machine_id=${parentUser.m_uid} - 슬롯 ${assignedSlot}번, total=${newMachine.total}`);
-            } else {
-              console.log(`[ScheduleService] 경고: 사용 가능한 슬롯이 없음 (최대 6개)`);
-            }
-          } else {
-            console.log(`[ScheduleService] 경고: 부모 계정의 m_uid를 찾을 수 없음`);
-          }
-        }
-      } else {
-        if (!isParentUser && parsedTotalQuantity > 0) {
-          console.log(`[ScheduleService] ❌ 자녀계정이므로 Machine 테이블 업데이트 건너뜀 - isParentUser: ${isParentUser}`);
-          console.log(`[ScheduleService]    자녀계정은 총량 조회만 가능하며 변경할 수 없습니다.`);
-        } else {
-          console.log(`[ScheduleService] Machine 테이블 업데이트 건너뜀 - totalQuantity: "${totalQuantity}" → parsedTotalQuantity: ${parsedTotalQuantity} (유효하지 않음)`);
-        }
-      }
-
-      // 새로운 스케줄 생성
-      const newSchedules: Schedule[] = scheduleData.map(item => {
-        // 🔥 복용량 결정 로직 개선: 전달된 doseCount > 기존 설정된 복용량 > item.dose > 기본값 1
-        let finalDose = 1; // 기본값
-        
-        if (doseCount && !isNaN(Number(doseCount)) && Number(doseCount) > 0) {
-          // 1. 전달된 doseCount 우선 사용
-          finalDose = Number(doseCount);
-          console.log(`[ScheduleService] doseCount 사용: ${finalDose}`);
-        } else {
-          // 2. 기존 설정된 복용량 조회 시도
-          console.log(`[ScheduleService] doseCount가 없어서 기존 설정 조회 시도`);
-          // 여기서는 동기적으로 조회할 수 없으므로, 이후에 조회하여 설정
-        }
-        
-        if (finalDose === 1 && item.dose && !isNaN(Number(item.dose)) && Number(item.dose) > 0) {
-          // 3. item.dose 사용
-          finalDose = Number(item.dose);
-          console.log(`[ScheduleService] item.dose 사용: ${finalDose}`);
-        }
-        
-        console.log(`[ScheduleService] 스케줄 생성: ${item.day_of_week} ${item.time_of_day}, dose=${finalDose} (doseCount=${doseCount}, item.dose=${item.dose})`);
-        
-        return this.scheduleRepo.create({
-          schedule_id: randomUUID(),
-          user_id: user.user_id,
-          medi_id: medicine.medi_id,
-          connect: user.connect!,
-          day_of_week: item.day_of_week,
-          time_of_day: item.time_of_day,
-          dose: finalDose,
-        });
-      });
-
-      // 🔥 doseCount가 전달되지 않은 경우 기존 복용량 조회하여 적용
-      if (!doseCount || isNaN(Number(doseCount)) || Number(doseCount) <= 0) {
-        console.log(`[ScheduleService] doseCount가 없어서 기존 복용량 조회`);
-        
-        // 🔥 1. 부모가 자녀 관리하는 경우: 부모의 복용량 우선 조회
-        if (isParentManagingChild && requestUser) {
-          console.log(`[ScheduleService] 부모가 자녀 관리: 부모의 복용량 조회 시도`);
-          const parentSchedule = await this.scheduleRepo.findOne({
-            where: {
-              medi_id: medicine.medi_id,
-              user_id: requestUser.user_id, // 부모의 user_id
-              connect: user.connect!
-            },
-            order: { created_at: 'DESC' }
-          });
-          
-          if (parentSchedule && parentSchedule.dose > 0) {
-            console.log(`[ScheduleService] 🔥 부모의 복용량 발견: ${parentSchedule.dose}정 → 자녀에게 적용`);
-            newSchedules.forEach(schedule => {
-              schedule.dose = parentSchedule.dose;
-            });
-          } else {
-            console.log(`[ScheduleService] 부모의 복용량이 없어서 가족 내 다른 사용자 조회`);
-            // 부모의 복용량이 없으면 가족 내 다른 사용자 조회
-            const familySchedule = await this.scheduleRepo.findOne({
-              where: {
-                medi_id: medicine.medi_id,
-                connect: user.connect!,
-              },
-              order: { created_at: 'DESC' }
-            });
-            
-            if (familySchedule && familySchedule.dose > 0) {
-              console.log(`[ScheduleService] 가족 내 복용량 발견: ${familySchedule.dose}정`);
-              newSchedules.forEach(schedule => {
-                schedule.dose = familySchedule.dose;
-              });
-            }
-          }
-        } else {
-          // 🔥 2. 일반적인 경우: 같은 약의 가족 내 복용량 조회
-          const existingScheduleFromFamily = await this.scheduleRepo.findOne({
-            where: {
-              medi_id: medicine.medi_id,
-              connect: user.connect!, // 같은 가족
-            },
-            order: { created_at: 'DESC' }
-          });
-          
-          if (existingScheduleFromFamily && existingScheduleFromFamily.dose > 0) {
-            console.log(`[ScheduleService] 가족 내 복용량 발견: ${existingScheduleFromFamily.dose}정`);
-            newSchedules.forEach(schedule => {
-              schedule.dose = existingScheduleFromFamily.dose;
-            });
-          } else {
-            // 3. 현재 사용자의 기존 스케줄에서 복용량 조회
-            const existingSchedule = await this.scheduleRepo.findOne({
-              where: {
-                medi_id: medicine.medi_id,
-                user_id: user.user_id,
-              },
-              order: { created_at: 'DESC' }
-            });
-            
-            if (existingSchedule && existingSchedule.dose > 0) {
-              console.log(`[ScheduleService] 자신의 기존 복용량 발견: ${existingSchedule.dose}정`);
-              newSchedules.forEach(schedule => {
-                schedule.dose = existingSchedule.dose;
-              });
-            } else {
-              console.log(`[ScheduleService] 기존 복용량이 없어서 기본값 1정 사용`);
-            }
-          }
-        }
-      }
-
-      await this.scheduleRepo.save(newSchedules);
-      return { success: true, created: true };
+      return this.saveMatrixSchedule(medicineId, memberId, scheduleData, totalQuantity, requestUserId);
     }
 
-    // 기존 객체 형태 처리 (하위 호환성)
-    if (!scheduleData || typeof scheduleData !== 'object') {
-      throw new Error('유효하지 않은 스케줄 데이터입니다.');
-    }
-
-    const days: string[] = [];
-    const times: Set<string> = new Set();
-
-    for (const [day, timeObj] of Object.entries(scheduleData)) {
-      days.push(day);
-      if (typeof timeObj === 'object' && timeObj !== null) {
-        Object.entries(timeObj as Record<string, unknown>).forEach(
-          ([time, val]) => {
-            if (val) times.add(time);
-          },
-        );
-      }
-    }
-
-    const user = await this.userRepo.findOne({ where: { user_id: memberId } });
-    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    if (!user.connect) throw new NotFoundException('사용자의 connect 정보가 없습니다.');
+    // 객체 형태 스케줄 데이터 처리
+    const { user, group } = await this.getUserGroup(memberId);
 
     const medicine = await this.medicineRepo.findOne({
-      where: { medi_id: medicineId, connect: user.connect! },
+      where: { medi_id: medicineId, group_id: group.group_id }
     });
-    if (!medicine) throw new NotFoundException('약 정보를 찾을 수 없습니다.');
+
+    if (!medicine) {
+      throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
+    }
 
     // 기존 스케줄 삭제
     await this.scheduleRepo.delete({
-      user_id: user.user_id,
-      medi_id: medicine.medi_id,
+      user_id: memberId,
+      medi_id: medicineId,
+      group_id: group.group_id
     });
 
-    // 🔥 총량/복용량 업데이트 - Machine 테이블에서 해당 약의 슬롯 찾기
-    // 🚨 중요: 부모가 자식 스케줄을 관리할 때는 totalQuantity 업데이트 금지
-    let requestUser: User | null = null;
-    if (requestUserId && requestUserId !== memberId) {
-      requestUser = await this.userRepo.findOne({ where: { user_id: requestUserId } });
-      console.log(`[ScheduleService] 객체형 - 요청자와 대상자가 다름 - 요청자: ${requestUserId}, 대상자: ${memberId}`);
-    }
-    
-    const isParentManagingChild = requestUser && requestUser.role === UserRole.PARENT && requestUser.user_id !== memberId;
-    const isParentUser = requestUser ? requestUser.role === UserRole.PARENT : user.role === UserRole.PARENT;
-    
-    if (totalQuantity && totalQuantity.trim() !== '' && !isNaN(Number(totalQuantity)) && Number(totalQuantity) > 0 && isParentUser) {
-      console.log(`[ScheduleService] 객체형 - Machine 테이블 업데이트 시도 - totalQuantity: ${totalQuantity}, user_role: ${user.role}`);
-      console.log(`[ScheduleService] 객체형 - 요청자 분석: isParentUser=${isParentUser}`);
+    // 새 스케줄 생성
+    const schedule = this.scheduleRepo.create({
+      schedule_id: randomUUID(),
+      group_id: group.group_id,
+      medi_id: medicineId,
+      user_id: memberId,
+      day_of_week: scheduleData.day_of_week,
+      time_of_day: scheduleData.time_of_day,
+      dose: scheduleData.dose || 1,
+      created_at: new Date(),
+    });
+
+    const savedSchedule = await this.scheduleRepo.save(schedule);
+
+    // MachineSlot 업데이트
+    if (totalQuantity) {
+      const requestMembership = requestUserId ? await this.membershipRepo.findOne({
+        where: { user_id: requestUserId }
+      }) : null;
       
-      console.log(`[ScheduleService] 객체형 - 🔥 부모계정이므로 Machine 테이블 업데이트 진행`);
-        
-      let machineRecord = await this.machineRepo.findOne({
-        where: { 
-          medi_id: medicine.medi_id,
-          owner: user.connect! 
-        }
-      });
-      
-      if (machineRecord) {
-        // 기존 Machine 레코드 업데이트
-        machineRecord.total = Number(totalQuantity);
-        machineRecord.remain = Number(totalQuantity);
-        await this.machineRepo.save(machineRecord);
-        console.log(`[ScheduleService] 기존 Machine 업데이트: total=${machineRecord.total}, remain=${machineRecord.remain}`);
-      } else {
-        // 🔥 Machine 레코드가 없으면 새로 생성
-        console.log(`[ScheduleService] Machine 레코드가 없어서 새로 생성: medi_id=${medicine.medi_id}, owner=${user.connect}`);
-        
-        // 부모 계정의 m_uid 조회
-        const parentUser = await this.userRepo.findOne({
-          where: { connect: user.connect!, role: UserRole.PARENT },
-          select: ['m_uid']
-        });
-        
-        if (parentUser?.m_uid) {
-          // 사용 중인 슬롯 조회 (복합키 구조에 맞게 수정)
-          const usedMachines = await this.machineRepo.find({
-            where: { owner: user.connect! },
-            select: ['machine_id', 'slot']
-          });
-          const usedSlots = usedMachines.map(m => m.slot).filter(slot => slot !== null);
-          
-          // 빈 슬롯 찾기 (1번부터)
-          let assignedSlot = 1;
-          while (usedSlots.includes(assignedSlot) && assignedSlot <= 6) {
-            assignedSlot++;
-          }
-          
-          if (assignedSlot <= 6) {
-            // 🔥 Foreign Key 제약 조건 수정: machine_id는 실제 m_uid 사용
-            const newMachine = this.machineRepo.create({
-              machine_id: parentUser.m_uid, // 🔥 실제 m_uid 사용 (Foreign Key 만족)
-              medi_id: medicine.medi_id,
-              owner: user.connect!,
-              slot: assignedSlot, // 🔥 슬롯 정보는 별도 필드에 저장
-              total: Number(totalQuantity),
-              remain: Number(totalQuantity),
-              error_status: '',
-              last_error_at: new Date()
-            });
-            
-            await this.machineRepo.save(newMachine);
-            console.log(`[ScheduleService] 새 Machine 레코드 생성: machine_id=${parentUser.m_uid} - 슬롯 ${assignedSlot}번, total=${newMachine.total}`);
-          } else {
-            console.log(`[ScheduleService] 경고: 사용 가능한 슬롯이 없음 (최대 6개)`);
-          }
-        } else {
-          console.log(`[ScheduleService] 경고: 부모 계정의 m_uid를 찾을 수 없음`);
-        }
-      }
-    } else if (totalQuantity && totalQuantity.trim() !== '' && !isNaN(Number(totalQuantity)) && Number(totalQuantity) > 0 && !isParentUser) {
-      console.log(`[ScheduleService] 객체형 - ❌ 자녀계정이므로 Machine 테이블 업데이트 건너뜀 - isParentUser: ${isParentUser}`);
-      console.log(`[ScheduleService] 객체형 -    자녀계정은 총량 조회만 가능하며 변경할 수 없습니다.`);
-    } else {
-      console.log(`[ScheduleService] 객체형 - Machine 테이블 업데이트 건너뜀 - totalQuantity: "${totalQuantity}" (빈 값이거나 유효하지 않음)`);
+      await this.updateMachineSlotQuantity(group.group_id, medicineId, totalQuantity, requestMembership);
     }
 
-    // 새로운 스케줄 생성
-    const newSchedules: Schedule[] = [];
-
-    for (const day of days) {
-      for (const time of times) {
-        const schedule = this.scheduleRepo.create({
-          schedule_id: randomUUID(),
-          user_id: user.user_id,
-          medi_id: medicine.medi_id,
-          connect: user.connect!,
-          day_of_week: day as Schedule['day_of_week'],
-          time_of_day: time as Schedule['time_of_day'],
-          dose: Number(doseCount) > 0 ? Number(doseCount) : 1,
-        });
-        newSchedules.push(schedule);
-      }
-    }
-
-    await this.scheduleRepo.save(newSchedules);
-    return { success: true, created: true };
+    return {
+      success: true,
+      message: '스케줄이 저장되었습니다.',
+      data: savedSchedule
+    };
   }
 
-  // 🔥 새로운 메서드: 시간대별 복용량을 처리하는 스케줄 저장
+  // 타임도스 저장 (시간대별 용량 설정)
   async saveScheduleWithTimeDoses(
     medicineId: string,
     memberId: string,
@@ -560,316 +343,135 @@ export class ScheduleService {
       eveningDose?: number;
     }
   ) {
-    console.log('🔥 시간대별 복용량 저장 요청:', { 
-      medicineId, 
-      memberId, 
-      totalQuantity, 
-      doseCount, 
-      requestUserId,
-      timeDoses 
+    console.log('[ScheduleService] 타임도스 스케줄 저장:', { medicineId, memberId, timeDoses });
+
+    const { user, group } = await this.getUserGroup(memberId);
+
+    const medicine = await this.medicineRepo.findOne({
+      where: { medi_id: medicineId, group_id: group.group_id }
     });
 
-    // 배열 형태의 스케줄 데이터 처리
-    if (Array.isArray(scheduleData)) {
-      console.log('배열 형태의 스케줄 데이터:', scheduleData);
-      
-      const user = await this.userRepo.findOne({ where: { user_id: memberId } });
-      if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-      if (!user.connect) throw new NotFoundException('사용자의 connect 정보가 없습니다.');
-
-      // 🔥 실제 요청한 사용자 정보 조회 (부모가 자식 관리하는지 확인용)
-      let requestUser: User | null = null;
-      if (requestUserId && requestUserId !== memberId) {
-        requestUser = await this.userRepo.findOne({ where: { user_id: requestUserId } });
-        console.log(`[ScheduleService] 요청자와 대상자가 다름 - 요청자: ${requestUserId}, 대상자: ${memberId}`);
-        console.log(`[ScheduleService] 요청자 정보:`, requestUser ? { role: requestUser.role, name: requestUser.name } : '없음');
-      }
-
-      const medicine = await this.medicineRepo.findOne({
-        where: { medi_id: medicineId, connect: user.connect! },
-      });
-      if (!medicine) throw new NotFoundException('약 정보를 찾을 수 없습니다.');
-
-      // 기존 스케줄 삭제
-      await this.scheduleRepo.delete({
-        user_id: user.user_id,
-        medi_id: medicine.medi_id,
-      });
-
-      // 🔥 Machine 테이블 업데이트 로직 (기존과 동일)
-      const isParentManagingChild = requestUser && requestUser.role === UserRole.PARENT && requestUser.user_id !== memberId;
-      
-      let parsedTotalQuantity = 0;
-      if (totalQuantity && totalQuantity.trim() !== '') {
-        const cleanedQuantity = totalQuantity.replace(/[#]/g, '');
-        parsedTotalQuantity = Number(cleanedQuantity);
-        console.log(`[ScheduleService] totalQuantity 파싱: "${totalQuantity}" → "${cleanedQuantity}" → ${parsedTotalQuantity}`);
-      }
-      
-      // 🔥 부모계정만 Machine 테이블 업데이트 허용 (자녀계정은 조회만 가능)
-      const isParentUser = requestUser ? requestUser.role === UserRole.PARENT : user.role === UserRole.PARENT;
-      
-      if (parsedTotalQuantity > 0 && isParentUser) {
-        console.log(`[ScheduleService] ✅ 부모계정이므로 Machine 테이블 업데이트 진행 - isParentUser: ${isParentUser}`);
-        
-        let machineRecord = await this.machineRepo.findOne({
-          where: { 
-            medi_id: medicine.medi_id,
-            owner: user.connect! 
-          }
-        });
-        
-        if (machineRecord) {
-          machineRecord.total = parsedTotalQuantity;
-          machineRecord.remain = parsedTotalQuantity;
-          await this.machineRepo.save(machineRecord);
-          console.log(`[ScheduleService] 기존 Machine 업데이트: total=${machineRecord.total}, remain=${machineRecord.remain}`);
-        } else {
-          console.log(`[ScheduleService] Machine 레코드가 없어서 새로 생성`);
-          
-          // 부모 계정의 m_uid 조회
-          const parentUser = await this.userRepo.findOne({
-            where: { connect: user.connect!, role: UserRole.PARENT },
-            select: ['m_uid']
-          });
-          
-          if (parentUser?.m_uid) {
-            // 사용 중인 슬롯 조회
-            const usedMachines = await this.machineRepo.find({
-              where: { owner: user.connect! },
-              select: ['machine_id', 'slot']
-            });
-            const usedSlots = usedMachines.map(m => m.slot).filter(slot => slot !== null);
-            
-            // 빈 슬롯 찾기 (1번부터)
-            let assignedSlot = 1;
-            while (usedSlots.includes(assignedSlot) && assignedSlot <= 6) {
-              assignedSlot++;
-            }
-            
-            if (assignedSlot <= 6) {
-              const newMachine = this.machineRepo.create({
-                machine_id: parentUser.m_uid,
-                medi_id: medicine.medi_id,
-                owner: user.connect!,
-                slot: assignedSlot,
-                total: parsedTotalQuantity,
-                remain: parsedTotalQuantity,
-                error_status: '',
-                last_error_at: new Date()
-              });
-              
-              await this.machineRepo.save(newMachine);
-              console.log(`[ScheduleService] 새 Machine 레코드 생성: machine_id=${parentUser.m_uid} - 슬롯 ${assignedSlot}번, total=${newMachine.total}`);
-            } else {
-              console.log(`[ScheduleService] 경고: 사용 가능한 슬롯이 없음 (최대 6개)`);
-            }
-          } else {
-            console.log(`[ScheduleService] 경고: 부모 계정의 m_uid를 찾을 수 없음`);
-          }
-        }
-      } else if (parsedTotalQuantity > 0 && !isParentUser) {
-        console.log(`[ScheduleService] saveScheduleWithTimeDoses - ❌ 자녀계정이므로 Machine 테이블 업데이트 건너뜀 - isParentUser: ${isParentUser}`);
-        console.log(`[ScheduleService] saveScheduleWithTimeDoses -    자녀계정은 총량 조회만 가능하며 변경할 수 없습니다.`);
-      }
-
-      // 🔥 시간대별 복용량을 적용한 새로운 스케줄 생성
-      const newSchedules: Schedule[] = scheduleData.map(item => {
-        let finalDose = 1; // 기본값
-        
-        // 1. doseCount가 있으면 기본값으로 사용
-        if (doseCount && !isNaN(Number(doseCount)) && Number(doseCount) > 0) {
-          finalDose = Number(doseCount);
-        }
-        
-        // 2. item.dose가 있으면 사용
-        if (item.dose && !isNaN(Number(item.dose)) && Number(item.dose) > 0) {
-          finalDose = Number(item.dose);
-        }
-        
-        // 3. 🔥 시간대별 복용량이 있으면 최우선 적용 (V2 API의 핵심 기능)
-        if (timeDoses) {
-          if (item.time_of_day === 'morning' && timeDoses.morningDose && timeDoses.morningDose > 0) {
-            finalDose = timeDoses.morningDose;
-          } else if (item.time_of_day === 'afternoon' && timeDoses.afternoonDose && timeDoses.afternoonDose > 0) {
-            finalDose = timeDoses.afternoonDose;
-          } else if (item.time_of_day === 'evening' && timeDoses.eveningDose && timeDoses.eveningDose > 0) {
-            finalDose = timeDoses.eveningDose;
-          }
-        }
-        
-        console.log(`[ScheduleService] 🔥 시간대별 스케줄 생성: ${item.day_of_week} ${item.time_of_day}, 최종 복용량=${finalDose} (timeDoses.${item.time_of_day}Dose=${timeDoses?.[item.time_of_day + 'Dose']}, doseCount=${doseCount}, item.dose=${item.dose})`);
-        
-        return this.scheduleRepo.create({
-          schedule_id: randomUUID(),
-          user_id: user.user_id,
-          medi_id: medicine.medi_id,
-          connect: user.connect!,
-          day_of_week: item.day_of_week,
-          time_of_day: item.time_of_day,
-          dose: finalDose,
-        });
-      });
-
-      // 🔥 doseCount가 전달되지 않은 경우 기존 복용량 조회하여 적용 (saveSchedule과 동일한 로직)
-      if (!doseCount || isNaN(Number(doseCount)) || Number(doseCount) <= 0) {
-        console.log(`[ScheduleService] saveScheduleWithTimeDoses - doseCount가 없어서 기존 복용량 조회`);
-        
-        // 🔥 1. 부모가 자녀 관리하는 경우: 부모의 복용량 우선 조회
-        if (isParentManagingChild && requestUser) {
-          console.log(`[ScheduleService] saveScheduleWithTimeDoses - 부모가 자녀 관리: 부모의 복용량 조회 시도`);
-          const parentSchedule = await this.scheduleRepo.findOne({
-            where: {
-              medi_id: medicine.medi_id,
-              user_id: requestUser.user_id, // 부모의 user_id
-              connect: user.connect!
-            },
-            order: { created_at: 'DESC' }
-          });
-          
-          if (parentSchedule && parentSchedule.dose > 0) {
-            console.log(`[ScheduleService] saveScheduleWithTimeDoses - 🔥 부모의 복용량 발견: ${parentSchedule.dose}정 → 자녀에게 적용`);
-            newSchedules.forEach(schedule => {
-              // timeDoses가 설정되지 않은 시간대만 부모 복용량 적용
-              if (!timeDoses || 
-                  (schedule.time_of_day === 'morning' && (!timeDoses.morningDose || timeDoses.morningDose <= 0)) ||
-                  (schedule.time_of_day === 'afternoon' && (!timeDoses.afternoonDose || timeDoses.afternoonDose <= 0)) ||
-                  (schedule.time_of_day === 'evening' && (!timeDoses.eveningDose || timeDoses.eveningDose <= 0))) {
-                schedule.dose = parentSchedule.dose;
-              }
-            });
-          } else {
-            console.log(`[ScheduleService] saveScheduleWithTimeDoses - 부모의 복용량이 없어서 가족 내 다른 사용자 조회`);
-            // 부모의 복용량이 없으면 가족 내 다른 사용자 조회
-            const familySchedule = await this.scheduleRepo.findOne({
-              where: {
-                medi_id: medicine.medi_id,
-                connect: user.connect!,
-              },
-              order: { created_at: 'DESC' }
-            });
-            
-            if (familySchedule && familySchedule.dose > 0) {
-              console.log(`[ScheduleService] saveScheduleWithTimeDoses - 가족 내 복용량 발견: ${familySchedule.dose}정`);
-              newSchedules.forEach(schedule => {
-                if (!timeDoses || 
-                    (schedule.time_of_day === 'morning' && (!timeDoses.morningDose || timeDoses.morningDose <= 0)) ||
-                    (schedule.time_of_day === 'afternoon' && (!timeDoses.afternoonDose || timeDoses.afternoonDose <= 0)) ||
-                    (schedule.time_of_day === 'evening' && (!timeDoses.eveningDose || timeDoses.eveningDose <= 0))) {
-                  schedule.dose = familySchedule.dose;
-                }
-              });
-            }
-          }
-        } else {
-          // 🔥 2. 일반적인 경우: 같은 약의 가족 내 복용량 조회
-          const existingScheduleFromFamily = await this.scheduleRepo.findOne({
-            where: {
-              medi_id: medicine.medi_id,
-              connect: user.connect!, // 같은 가족
-            },
-            order: { created_at: 'DESC' }
-          });
-          
-          if (existingScheduleFromFamily && existingScheduleFromFamily.dose > 0) {
-            console.log(`[ScheduleService] saveScheduleWithTimeDoses - 가족 내 복용량 발견: ${existingScheduleFromFamily.dose}정`);
-            newSchedules.forEach(schedule => {
-              if (!timeDoses || 
-                  (schedule.time_of_day === 'morning' && (!timeDoses.morningDose || timeDoses.morningDose <= 0)) ||
-                  (schedule.time_of_day === 'afternoon' && (!timeDoses.afternoonDose || timeDoses.afternoonDose <= 0)) ||
-                  (schedule.time_of_day === 'evening' && (!timeDoses.eveningDose || timeDoses.eveningDose <= 0))) {
-                schedule.dose = existingScheduleFromFamily.dose;
-              }
-            });
-          } else {
-            // 3. 현재 사용자의 기존 스케줄에서 복용량 조회
-            const existingSchedule = await this.scheduleRepo.findOne({
-              where: {
-                medi_id: medicine.medi_id,
-                user_id: user.user_id,
-              },
-              order: { created_at: 'DESC' }
-            });
-            
-            if (existingSchedule && existingSchedule.dose > 0) {
-              console.log(`[ScheduleService] saveScheduleWithTimeDoses - 자신의 기존 복용량 발견: ${existingSchedule.dose}정`);
-              newSchedules.forEach(schedule => {
-                if (!timeDoses || 
-                    (schedule.time_of_day === 'morning' && (!timeDoses.morningDose || timeDoses.morningDose <= 0)) ||
-                    (schedule.time_of_day === 'afternoon' && (!timeDoses.afternoonDose || timeDoses.afternoonDose <= 0)) ||
-                    (schedule.time_of_day === 'evening' && (!timeDoses.eveningDose || timeDoses.eveningDose <= 0))) {
-                  schedule.dose = existingSchedule.dose;
-                }
-              });
-            } else {
-              console.log(`[ScheduleService] saveScheduleWithTimeDoses - 기존 복용량이 없어서 기본값 1정 사용`);
-            }
-          }
-        }
-      }
-
-      await this.scheduleRepo.save(newSchedules);
-      return { success: true, message: '시간대별 복용량이 적용된 스케줄이 저장되었습니다.' };
+    if (!medicine) {
+      throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
     }
 
-    // 객체 형태의 스케줄 데이터는 기존 saveSchedule 메서드로 위임
-    return this.saveSchedule(medicineId, memberId, scheduleData, totalQuantity, doseCount, requestUserId);
+    // 기존 스케줄 삭제
+    await this.scheduleRepo.delete({
+      user_id: memberId,
+      medi_id: medicineId,
+      group_id: group.group_id
+    });
+
+    // 타임도스 스케줄 생성
+    const newSchedules = [];
+    
+    if (timeDoses?.morningDose && timeDoses.morningDose > 0) {
+      const schedule = this.scheduleRepo.create({
+        schedule_id: randomUUID(),
+        group_id: group.group_id,
+        medi_id: medicineId,
+        user_id: memberId,
+        day_of_week: scheduleData.day_of_week || 'daily',
+        time_of_day: 'morning',
+        dose: timeDoses.morningDose,
+        created_at: new Date(),
+      });
+      newSchedules.push(schedule);
+    }
+
+    if (timeDoses?.afternoonDose && timeDoses.afternoonDose > 0) {
+      const schedule = this.scheduleRepo.create({
+        schedule_id: randomUUID(),
+        group_id: group.group_id,
+        medi_id: medicineId,
+        user_id: memberId,
+        day_of_week: scheduleData.day_of_week || 'daily',
+        time_of_day: 'afternoon',
+        dose: timeDoses.afternoonDose,
+        created_at: new Date(),
+      });
+      newSchedules.push(schedule);
+    }
+
+    if (timeDoses?.eveningDose && timeDoses.eveningDose > 0) {
+      const schedule = this.scheduleRepo.create({
+        schedule_id: randomUUID(),
+        group_id: group.group_id,
+        medi_id: medicineId,
+        user_id: memberId,
+        day_of_week: scheduleData.day_of_week || 'daily',
+        time_of_day: 'evening',
+        dose: timeDoses.eveningDose,
+        created_at: new Date(),
+      });
+      newSchedules.push(schedule);
+    }
+
+    const savedSchedules = await this.scheduleRepo.save(newSchedules);
+
+    // MachineSlot 업데이트
+    if (totalQuantity) {
+      const requestMembership = requestUserId ? await this.membershipRepo.findOne({
+        where: { user_id: requestUserId }
+      }) : null;
+      
+      await this.updateMachineSlotQuantity(group.group_id, medicineId, totalQuantity, requestMembership);
+    }
+
+    return {
+      success: true,
+      message: '타임도스 스케줄이 저장되었습니다.',
+      data: savedSchedules
+    };
   }
 
-  // 2. 스케줄 조회
+  // 스케줄 조회
   async getSchedule(medicineId: string, memberId: string) {
-    // 🔥 저장할 때와 동일한 방식으로 실제 사용자 정보 조회
-    const user = await this.userRepo.findOne({ where: { user_id: memberId } });
-    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    if (!user.connect) throw new NotFoundException('사용자의 connect 정보가 없습니다.');
+    const { user, group } = await this.getUserGroup(memberId);
 
-    console.log(`[ScheduleService] 스케줄 조회: medicineId=${medicineId}, memberId=${memberId}, user.user_id=${user.user_id}, connect=${user.connect}`);
+    console.log(`[ScheduleService] 스케줄 조회: ${medicineId}/${memberId}, group: ${group.group_id}`);
+    console.log(`[DEBUG] getSchedule - User ${memberId} belongs to group_id: ${group.group_id}`); // Log user's group_id
+    console.log(`[DEBUG] getSchedule - Querying for medicineId: ${medicineId}`); // Log medicineId
 
+    // 스케줄 조회
     const schedules = await this.scheduleRepo.find({
       where: {
-        user_id: user.user_id,  // 🔥 실제 조회된 user_id 사용
+        user_id: memberId,
         medi_id: medicineId,
-      },
-      relations: ['user', 'medicine'],
+        group_id: group.group_id
+      }
     });
 
-    console.log(`[ScheduleService] 조회된 스케줄 개수: ${schedules.length}`);
-    if (schedules.length > 0) {
-      console.log(`[ScheduleService] 첫 번째 스케줄의 복용량: ${schedules[0].dose}`);
+    // MachineSlot 정보 조회
+    const machineSlots = await this.machineSlotRepo
+      .createQueryBuilder('slot')
+      .innerJoinAndSelect('slot.machine', 'machine') // Changed to innerJoinAndSelect
+      .where('machine.group_id = :group_id', { group_id: group.group_id })
+      .andWhere('slot.medi_id = :medi_id', { medi_id: medicineId })
+      .getMany();
+
+    console.log(`[DEBUG] getSchedule - MachineSlots query result length: ${machineSlots.length}`); // Log machineSlots length
+    if (machineSlots.length > 0) {
+      // Removed the problematic log line, as machine.machine_id should now be accessible
+      console.log(`[DEBUG] getSchedule - Found MachineSlot for machine_id: ${machineSlots[0].machine.machine_id}, group_id: ${machineSlots[0].machine.group_id}`);
     }
 
-    // 🔥 스케줄이 없어도 에러를 던지지 않고 빈 배열 반환
-    if (!schedules || schedules.length === 0) {
-      console.log(`[ScheduleService] 스케줄이 없습니다 - 빈 배열 반환: medicineId=${medicineId}, memberId=${memberId}`);
-      return [];
-    }
+    const slotInfo = machineSlots.length > 0 ? machineSlots[0] : null;
 
-    // 🔥 Machine 정보도 함께 조회
-    const machine = await this.machineRepo.findOne({
-      where: { 
-        medi_id: medicineId,
-        owner: user.connect! 
-      },
-      select: ['slot', 'total', 'remain', 'machine_id']
-    });
-
-    console.log(`[ScheduleService] Machine 정보:`, machine ? {
-      machine_id: machine.machine_id,
-      slot: machine.slot,
-      total: machine.total,
-      remain: machine.remain
-    } : 'Machine 레코드 없음');
-
-    // 🔥 스케줄 데이터에 Machine 정보 추가
-    const enrichedSchedules = schedules.map(schedule => ({
-      ...schedule,
-      machine: machine
-    }));
-
-    return enrichedSchedules;
+    return {
+      success: true,
+      data: {
+        schedules,
+        slotInfo: slotInfo ? {
+          slot_number: slotInfo.slot_number,
+          total: slotInfo.total,
+          remain: slotInfo.remain
+        } : null
+      }
+    };
   }
 
-  // 🔥 실제 복용 완료 처리 - DoseHistoryService 사용
+  // 복용 완료 처리
   async completeDose(
     medicineId: string,
     userId: string,
@@ -877,386 +479,209 @@ export class ScheduleService {
     actualDose?: number,
     notes?: string
   ): Promise<{ success: boolean; message: string }> {
-    console.log(`🔥 [ScheduleService] 복용 완료 처리: ${medicineId}/${userId}/${timeOfDay}`);
-    
     try {
-      // DoseHistoryService를 통해 복용 완료 처리
-      const result = await this.doseHistoryService.completeDose(
+      await this.doseHistoryService.completeDose(
         userId,
         medicineId,
         timeOfDay,
         actualDose || 1,
         notes
       );
-      
-      console.log(`✅ [ScheduleService] 복용 완료 기록 저장: ${result.actual_dose}정`);
-      
+
       return {
         success: true,
-        message: `${result.actual_dose}정 복용이 완료되었습니다.`
+        message: '복용이 완료되었습니다.'
       };
-      
     } catch (error) {
-      console.error('🔥 [ScheduleService] 복용 완료 처리 실패:', error);
+      console.error('복용 완료 처리 오류:', error);
       return {
         success: false,
-        message: error.message || '복용 기록 저장에 실패했습니다.'
+        message: '복용 완료 처리에 실패했습니다.'
       };
     }
   }
 
-  // 🔥 복용 기록 조회 (특정 날짜) - DoseHistoryService 사용
+  // 복용 기록 조회
   async getDoseHistory(
     medicineId: string,
     userId: string,
     date?: string
   ): Promise<any[]> {
-    console.log(`🔍 [ScheduleService] 복용 기록 조회: ${medicineId}/${userId}/${date || 'today'}`);
-    
-    const targetDate = date || new Date().toISOString().split('T')[0];
-    const startDate = targetDate;
-    const endDate = targetDate;
-    
-    const histories = await this.doseHistoryService.getDoseHistory(
-      userId,
-      medicineId,
-      startDate,
-      endDate
-    );
-    
-    console.log(`🔍 [ScheduleService] 조회된 복용 기록 ${histories.length}개`);
-    
-    return histories;
+    return this.doseHistoryService.getDoseHistory(userId, medicineId, date, date);
   }
 
-  // 🔥 주간 복용 통계 (실제 데이터) - DoseHistoryService 사용
+  // 주간 통계
   async getWeeklyStats(userId: string, medicineId?: string): Promise<{
     totalScheduled: number;
     totalCompleted: number;
     completionRate: number;
     dailyStats: any[];
   }> {
-    console.log(`🔍 [ScheduleService] 주간 통계 조회: ${userId}, medicine=${medicineId || 'all'}`);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 6);
     
-    // 최근 7일간 날짜 생성
-    const dates: string[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      dates.push(date.toISOString().split('T')[0]);
-    }
-    
-    const dailyStats: Array<{
-      date: string;
-      scheduled: number;
-      completed: number;
-      rate: number;
-    }> = [];
-    let totalScheduled = 0;
-    let totalCompleted = 0;
-    
-    for (const date of dates) {
-      // 해당 날짜의 요일 계산
-      const dayMap = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-      const dayOfWeek = dayMap[new Date(date).getDay()];
-      
-      // 스케줄된 복용량 조회
-      const scheduleQuery: any = {
-        user_id: userId,
-        day_of_week: dayOfWeek
-      };
-      if (medicineId) {
-        scheduleQuery.medi_id = medicineId;
-      }
-      
-      const scheduledDoses = await this.scheduleRepo.find({
-        where: scheduleQuery
-      });
-      
-      const scheduledCount = scheduledDoses.reduce((sum, s) => sum + s.dose, 0);
-      
-      // 실제 복용 기록 조회
-      const historyQuery: any = {
-        user_id: userId,
-        dose_date: date,
-        status: 'completed'
-      };
-      if (medicineId) {
-        historyQuery.medi_id = medicineId;
-      }
-      
-      const completedDoses = await this.doseHistoryRepo.find({
-        where: historyQuery
-      });
-      
-      const completedCount = completedDoses.reduce((sum, h) => sum + h.actual_dose, 0);
-      
-      const rate = scheduledCount > 0 ? Math.round((completedCount / scheduledCount) * 100) : 0;
-      
-      dailyStats.push({
-        date,
-        scheduled: scheduledCount,
-        completed: completedCount,
-        rate
-      });
-      
-      totalScheduled += scheduledCount;
-      totalCompleted += completedCount;
-    }
-    
-    const completionRate = totalScheduled > 0 
-      ? Math.round((totalCompleted / totalScheduled) * 100) 
-      : 0;
-    
-    console.log(`🔍 [ScheduleService] 주간 통계: ${completionRate}% (${totalCompleted}/${totalScheduled})`);
+    const stats = await this.doseHistoryService.getWeeklyStats(userId, startDate.toISOString().split('T')[0]);
     
     return {
-      totalScheduled,
-      totalCompleted,
-      completionRate,
-      dailyStats
+      totalScheduled: stats.total_scheduled,
+      totalCompleted: stats.total_completed,
+      completionRate: stats.completion_rate,
+      dailyStats: stats.daily_stats
     };
   }
 
-  // 4. 오늘 스케줄 조회
-  async getTodaySchedule(connect: string) {
+  // 오늘의 스케줄 (그룹 기반)
+  async getTodaySchedule(groupId: string) {
     const today = new Date();
-    const dayMap = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const day = dayMap[today.getDay()] as Schedule['day_of_week'];
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayOfWeek = days[today.getDay()];
 
     const schedules = await this.scheduleRepo.find({
-      where: { connect, day_of_week: day },
-      relations: ['user', 'medicine'],
-    });
-
-    return {
-      date: today.toISOString().split('T')[0],
-      schedules: schedules.map((s) => ({
-        medicineId: s.medicine?.medi_id,
-        medicineName: s.medicine?.name,
-        memberName: s.user?.name,
-        time: s.time_of_day,
-        dosage: s.dose.toString(),
-        isCompleted: false,
-        type: 'medicine',
-      })),
-    };
-  }
-
-  // 5. 가족 요약 조회
-  async getFamilySummary(connect: string) {
-    const children = await this.userRepo.find({
-      where: { connect, role: UserRole.CHILD },
-      relations: ['schedules', 'schedules.medicine'],
-    });
-
-    const today = new Date();
-    const todayDay = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][
-      today.getDay()
-    ] as Schedule['day_of_week'];
-
-    return children.map((child) => {
-      const todaySchedules =
-        child.schedules?.filter((s) => s.day_of_week === todayDay) || [];
-
-      return {
-        memberId: child.user_id,
-        memberName: child.name,
-        activeMedicines: child.schedules?.length || 0,
-        todayCompleted: child.took_today ? todaySchedules.length : 0,
-        todayTotal: todaySchedules.length,
-        upcomingRefills: 0,
-      };
-    });
-  }
-
-  // 🔥 새로 추가: 현재 시간 기준 복용량 조회
-  async getCurrentDose(medicineId: string, userId: string): Promise<{ dose: number; timeSlot: string; nextDose?: { timeSlot: string; dose: number } }> {
-    console.log(`🔍 [ScheduleService] 현재 시간 복용량 조회: medicineId=${medicineId}, userId=${userId}`);
-    
-    // 1. 사용자 정보 조회
-    const user = await this.userRepo.findOne({
-      where: { user_id: userId },
-      select: ['user_id', 'connect']
-    });
-    
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
-    
-    // 2. 현재 시간 기준 시간대 결정
-    const now = new Date();
-    const hour = now.getHours();
-    
-    let currentTimeSlot: 'morning' | 'afternoon' | 'evening';
-    if (hour >= 6 && hour < 12) {
-      currentTimeSlot = 'morning';
-    } else if (hour >= 12 && hour < 18) {
-      currentTimeSlot = 'afternoon';
-    } else {
-      currentTimeSlot = 'evening';
-    }
-    
-    console.log(`🔍 [ScheduleService] 현재 시각: ${hour}시, 시간대: ${currentTimeSlot}`);
-    
-    // 3. 오늘 요일 결정
-    const dayMap = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const today = dayMap[now.getDay()] as Schedule['day_of_week'];
-    
-    console.log(`🔍 [ScheduleService] 오늘 요일: ${today}`);
-    
-    // 4. 현재 시간대 스케줄 조회
-    const currentSchedule = await this.scheduleRepo.findOne({
-      where: {
-        user_id: user.user_id,
-        medi_id: medicineId,
-        day_of_week: today,
-        time_of_day: currentTimeSlot
+      where: { 
+        group_id: groupId,
+        day_of_week: dayOfWeek as DayOfWeek
       },
-      select: ['dose', 'time_of_day']
+      relations: ['medicine', 'user']
     });
+
+    return schedules.map(schedule => ({
+      schedule_id: schedule.schedule_id,
+      user_id: schedule.user_id,
+      user_name: schedule.user?.name,
+      medi_id: schedule.medi_id,
+      medicine_name: schedule.medicine?.name,
+      time_of_day: schedule.time_of_day,
+      dose: schedule.dose
+    }));
+  }
+
+  // 가족 요약 (그룹 기반)
+  async getFamilySummary(groupId: string) {
+    const children = await this.membershipRepo.find({
+      where: { group_id: groupId, role: UserRole.CHILD },
+      relations: ['user']
+    });
+
+    return children.map(membership => ({
+      memberId: membership.user_id,
+      memberName: membership.user.name,
+      activeMedicines: 0, // 별도 계산 로직 필요
+      todayCompleted: 0,
+      todayTotal: 0,
+      upcomingRefills: 0,
+    }));
+  }
+
+  // 현재 복용량 조회
+  async getCurrentDose(medicineId: string, userId: string): Promise<{ 
+    dose: number; 
+    timeSlot: string; 
+    nextDose?: { timeSlot: string; dose: number } 
+  }> {
+    const currentHour = new Date().getHours();
+    let timeSlot = 'morning';
     
-    if (!currentSchedule) {
-      console.log(`🔍 [ScheduleService] 현재 시간대(${currentTimeSlot})에 복용할 약이 없습니다.`);
-      
-      // 5. 다음 복용 시간 찾기
-      const nextTimeSlots = currentTimeSlot === 'morning' ? ['afternoon', 'evening'] 
-                          : currentTimeSlot === 'afternoon' ? ['evening'] : [];
-      
-      let nextDose: { timeSlot: string; dose: number } | undefined = undefined;
-      for (const timeSlot of nextTimeSlots) {
-        const nextSchedule = await this.scheduleRepo.findOne({
-          where: {
-            user_id: user.user_id,
-            medi_id: medicineId,
-            day_of_week: today,
-            time_of_day: timeSlot as 'morning' | 'afternoon' | 'evening'
-          },
-          select: ['dose', 'time_of_day']
-        });
-        
-        if (nextSchedule) {
-          nextDose = { timeSlot, dose: nextSchedule.dose };
-          break;
-        }
-      }
-      
-      return {
-        dose: 0,
-        timeSlot: currentTimeSlot,
-        nextDose
-      };
+    if (currentHour >= 12 && currentHour < 18) {
+      timeSlot = 'afternoon';
+    } else if (currentHour >= 18) {
+      timeSlot = 'evening';
     }
-    
-    console.log(`🔍 [ScheduleService] 현재 복용량: ${currentSchedule.dose}정 (${currentTimeSlot})`);
-    
+
+    const { group } = await this.getUserGroup(userId);
+
+    const schedule = await this.scheduleRepo.findOne({
+      where: {
+        user_id: userId,
+        medi_id: medicineId,
+        group_id: group.group_id,
+        time_of_day: timeSlot as TimeOfDay
+      }
+    });
+
     return {
-      dose: currentSchedule.dose,
-      timeSlot: currentTimeSlot
+      dose: schedule?.dose || 1,
+      timeSlot,
     };
   }
 
-  // 🔥 새로 추가: 특정 약물의 하루 전체 복용 스케줄 조회
+  // 일일 스케줄 조회
   async getDailySchedule(medicineId: string, userId: string, date?: string): Promise<{
     morning: number;
     afternoon: number;  
     evening: number;
     total: number;
   }> {
-    console.log(`🔍 [ScheduleService] 하루 복용 스케줄 조회: medicineId=${medicineId}, userId=${userId}, date=${date || 'today'}`);
-    
-    // 1. 사용자 정보 조회
-    const user = await this.userRepo.findOne({
-      where: { user_id: userId },
-      select: ['user_id', 'connect']
-    });
-    
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
-    
-    // 2. 날짜 결정 (오늘 또는 지정된 날짜)
-    const targetDate = date ? new Date(date) : new Date();
-    const dayMap = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const targetDay = dayMap[targetDate.getDay()] as Schedule['day_of_week'];
-    
-    console.log(`🔍 [ScheduleService] 조회 날짜: ${targetDate.toISOString().split('T')[0]}, 요일: ${targetDay}`);
-    
-    // 3. 해당 날짜의 모든 시간대 스케줄 조회
+    const { group } = await this.getUserGroup(userId);
+
     const schedules = await this.scheduleRepo.find({
       where: {
-        user_id: user.user_id,
+        user_id: userId,
         medi_id: medicineId,
-        day_of_week: targetDay
-      },
-      select: ['time_of_day', 'dose']
+        group_id: group.group_id
+      }
     });
-    
-    console.log(`🔍 [ScheduleService] 조회된 스케줄 개수: ${schedules.length}`);
-    
-    // 4. 시간대별 복용량 정리
+
     const result = {
       morning: 0,
       afternoon: 0,
       evening: 0,
       total: 0
     };
-    
+
     schedules.forEach(schedule => {
-      if (schedule.time_of_day && schedule.dose > 0) {
-        result[schedule.time_of_day] = schedule.dose;
-        result.total += schedule.dose;
-        console.log(`🔍 [ScheduleService] ${schedule.time_of_day}: ${schedule.dose}정`);
-      }
+      result[schedule.time_of_day] = schedule.dose;
+      result.total += schedule.dose;
     });
-    
-    console.log(`🔍 [ScheduleService] 하루 총 복용량: ${result.total}정`);
-    
+
     return result;
   }
 
-  // 🔥 새로 추가: 사용자 연령 기반 유효성 검사
+  // 사용자 나이 유효성 검사
   private async validateUserAge(userId: string, medicineId: string): Promise<AgeValidationResult> {
     try {
       // 사용자 정보 조회
-      const user = await this.userRepo.findOne({ 
-        where: { user_id: userId },
-        select: ['user_id', 'age', 'role', 'connect']
-      });
-      
+      const user = await this.userRepo.findOne({ where: { user_id: userId } });
       if (!user) {
-        throw new NotFoundException('사용자를 찾을 수 없습니다.');
-      }
-
-      if (!user.age) {
         return {
-          allowed: true,
-          warnings: ['나이 정보가 없어 기본 검증만 수행됩니다.'],
-          requiresConsultation: false
+          allowed: false,
+          reason: '사용자를 찾을 수 없습니다.',
+          warnings: []
         };
       }
 
-      // 의약품 정보 조회 (금기사항 포함)
+      // 약물 정보 조회
+      const { group } = await this.getUserGroup(userId);
       const medicine = await this.medicineRepo.findOne({
-        where: { medi_id: medicineId, connect: user.connect! }
+        where: { medi_id: medicineId, group_id: group.group_id }
       });
 
       if (!medicine) {
-        throw new NotFoundException('의약품 정보를 찾을 수 없습니다.');
+        return {
+          allowed: false,
+          reason: '약물 정보를 찾을 수 없습니다.',
+          warnings: []
+        };
       }
 
-      // 연령 기반 유효성 검사 수행 (기본 검증)
-      // TODO: 실제 의약품 JSON 데이터에서 주의사항 정보를 가져와야 함
-      const contraindications = ''; // 현재는 기본 검증만 수행
-      const validationResult = this.ageValidationService.validateAge(user.age, contraindications);
+      // 나이 계산
+      const currentYear = new Date().getFullYear();
+      const birthYear = user.birthDate ? new Date(user.birthDate).getFullYear() : currentYear - user.age;
+      const userAge = currentYear - birthYear;
 
-      console.log(`🔍 [Validation] 사용자 ${userId}(${user.age}세)의 의약품 ${medicineId} 유효성 검사:`, validationResult);
-
-      return validationResult;
-
+      // AgeValidationService를 통한 검증
+      const result = this.ageValidationService.validateAge(userAge, String(medicine.warning || ''));
+      
+      return {
+        allowed: result.allowed,
+        reason: result.reason,
+        warnings: result.warnings
+      };
     } catch (error) {
-      console.error('🚨 [Validation] 유효성 검사 중 오류:', error);
-      throw error;
+      console.error('나이 유효성 검사 오류:', error);
+      return {
+        allowed: true, // 기본적으로 허용
+        warnings: ['나이 유효성 검사 중 오류가 발생했습니다.']
+      };
     }
   }
-}
+} 

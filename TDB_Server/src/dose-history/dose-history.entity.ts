@@ -2,12 +2,12 @@ import {
   Entity,
   PrimaryColumn,
   Column,
-  CreateDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
 import { User } from '../users/entities/users.entity';
-import { Medicine } from '../medicine/entities/medicine.entity';
+import { Medicine } from '../shared/entities/medicine.entity';
+import { UserGroup } from '../users/entities/user-group.entity';
 import { v4 as uuidv4 } from 'uuid';
 
 export enum DoseStatus {
@@ -16,34 +16,36 @@ export enum DoseStatus {
   PARTIAL = 'partial',
 }
 
+export type TimeOfDay = 'morning' | 'afternoon' | 'evening';
+
 @Entity('dose_history')
 export class DoseHistory {
   @PrimaryColumn({ type: 'varchar', length: 50 })
   history_id: string = uuidv4();
 
-  @Column({ type: 'varchar', length: 50 })
-  connect: string;
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  group_id: string;
 
-  @Column({ type: 'varchar', length: 50 })
+  @Column({ type: 'varchar', length: 50, nullable: true })
   user_id: string;
 
-  @Column({ type: 'varchar', length: 50 })
+  @Column({ type: 'varchar', length: 50, nullable: true })
   medi_id: string;
 
   @Column({
     type: 'enum',
     enum: ['morning', 'afternoon', 'evening'],
   })
-  time_of_day: 'morning' | 'afternoon' | 'evening';
+  time_of_day: TimeOfDay;
 
   @Column({ type: 'date' })
-  dose_date: string; // YYYY-MM-DD 형식
+  dose_date: Date;
 
   @Column({ type: 'int' })
-  scheduled_dose: number; // 복용 예정량
+  scheduled_dose: number;
 
   @Column({ type: 'int', default: 0 })
-  actual_dose: number; // 실제 복용량
+  actual_dose: number;
 
   @Column({
     type: 'enum',
@@ -52,23 +54,30 @@ export class DoseHistory {
   })
   status: DoseStatus;
 
-  @CreateDateColumn({ type: 'datetime' })
-  completed_at?: Date; // 복용 완료 시간
+  @Column({ 
+    type: 'datetime', 
+    precision: 6,
+    default: () => 'CURRENT_TIMESTAMP(6)'
+  })
+  completed_at: Date;
 
   @Column({ type: 'text', nullable: true })
-  notes?: string; // 메모 (부작용, 특이사항 등)
+  notes: string;
 
   // 관계 설정
-  @ManyToOne(() => User, (user) => user.doseHistories, { nullable: false })
+  @ManyToOne(() => UserGroup)
+  @JoinColumn({ name: 'group_id', referencedColumnName: 'group_id' })
+  group: UserGroup;
+
+  @ManyToOne(() => User, (user) => user.doseHistories)
   @JoinColumn({ name: 'user_id', referencedColumnName: 'user_id' })
   user: User;
 
-  @ManyToOne(() => Medicine, (medicine) => medicine.doseHistories, {
-    nullable: false,
-  })
+  // 복합키 외래키: (medi_id, group_id) → medicine.(medi_id, group_id)
+  @ManyToOne(() => Medicine, (medicine) => medicine.doseHistories)
   @JoinColumn([
     { name: 'medi_id', referencedColumnName: 'medi_id' },
-    { name: 'connect', referencedColumnName: 'connect' }
+    { name: 'group_id', referencedColumnName: 'group_id' }
   ])
   medicine: Medicine;
 } 

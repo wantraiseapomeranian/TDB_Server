@@ -1,9 +1,14 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Medicine } from '../medicine/entities/medicine.entity';
+import { Medicine } from '../shared/entities/medicine.entity';
 import { Machine } from '../machine/entities/machine.entity';
-import { User, UserRole } from '../users/entities/users.entity';
+import { MachineSlot } from '../machine/entities/machine-slot.entity';
+import { User } from '../users/entities/users.entity';
+import { UserRole } from '../users/entities/user-role.enum';
+import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
+import { MachineService } from '../machine/machine.service'; // 추가
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class SupplementService {
@@ -12,255 +17,292 @@ export class SupplementService {
     private readonly medicineRepo: Repository<Medicine>,
     @InjectRepository(Machine)
     private readonly machineRepo: Repository<Machine>,
+    @InjectRepository(MachineSlot)
+    private readonly machineSlotRepo: Repository<MachineSlot>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(UserGroupMembership)
+    private readonly membershipRepo: Repository<UserGroupMembership>,
+    
+    // 공통 슬롯 할당 서비스 주입
+    private readonly machineService: MachineService,
   ) {}
 
-  // 1. 영양제 목록 조회
-  async getSupplementList(connect: string): Promise<Medicine[]> {
-    // 🔥 Machine 테이블과 조인하여 슬롯 정보 포함
+  // 사용자의 그룹 정보 조회 헬퍼
+  private async getUserGroup(userId: string) {
+    const membership = await this.membershipRepo.findOne({
+      where: { user_id: userId },
+      relations: ['group']
+    });
+    
+    if (!membership) {
+      throw new NotFoundException('사용자의 그룹 정보를 찾을 수 없습니다.');
+    }
+    
+    return { group: membership.group, membership };
+  }
+
+  // 영양제 목록 조회
+  async getSupplements(userId: string) {
+    const { group } = await this.getUserGroup(userId);
+    
     const supplements = await this.medicineRepo.find({
-      where: { connect },
-      order: { start_date: 'ASC' },
+      where: { group_id: group.group_id },
     });
 
-    // 각 영양제에 대해 Machine 테이블에서 슬롯 정보 조회
-    const supplementsWithSlot = await Promise.all(
+    const supplementsWithMachine = await Promise.all(
       supplements.map(async (supplement) => {
-        const machine = await this.machineRepo.findOne({
-          where: { 
-            medi_id: supplement.medi_id, 
-            owner: connect 
-          },
-          select: ['machine_id', 'slot', 'total', 'remain']
+        // MachineSlot에서 해당 영양제 정보 조회
+        const machineSlot = await this.machineSlotRepo.findOne({
+          where: { medi_id: supplement.medi_id },
+          relations: ['machine']
         });
 
         return {
           ...supplement,
-          slot: machine?.slot || null,
-          total: machine?.total || null,
-          remain: machine?.remain || null,
-          // 🔥 프론트엔드 호환성을 위한 필드명 추가
-          totalQuantity: machine?.total?.toString() || null,
-          doseCount: '1', // 기본 복용량, 스케줄에서 개별 설정 가능
+          slot: machineSlot?.slot_number || null,
+          total: machineSlot?.total || null,
+          remain: machineSlot?.remain || null,
+          machine_id: machineSlot?.machine_id || null,
+          totalQuantity: machineSlot?.total?.toString() || null,
         };
       })
     );
 
-    return supplementsWithSlot;
+    return supplementsWithMachine;
   }
 
-  // 2. 영양제 등록
-  async saveSupplement(data: {
-    connect: string;
+  // 🔥 기존 슬롯 관련 메서드들 제거하고 공통 서비스 사용
+  // async findMachinesByGroup() - 제거됨
+  // async getUsedSlots() - 제거됨  
+  // async autoAssignSlot() - 제거됨
+
+  // 영양제 추가 (공통 슬롯 할당 서비스 사용) - 🔥 의약품과 동일하게 0으로 시작
+  async addSupplement(userId: string, data: {
     medi_id: string;
     name: string;
-    manufacturer?: string;
-    ingredients?: string;
-    primaryFunction?: string;
-    intakeMethod?: string;
-    precautions?: string;
-    warning?: boolean;
-    start_date?: string;
-    end_date?: string;
+    totalQuantity: string;
     slot?: number;
-    target_users?: string[] | null;
-    memberName?: string;
-    memberType?: string;
-  }): Promise<Medicine> {
-    const { medi_id, target_users } = data;
+  }) {
+    const { group } = await this.getUserGroup(userId);
     
-    console.log(`🔍 영양제 저장 요청 - connect: ${data.connect}, target_users:`, target_users);
-    
-    // 🔥 기기 연동 상태 확인 - connect 그룹의 부모 계정 m_uid 체크
-    const parentUser = await this.userRepo.findOne({
-      where: { connect: data.connect, role: UserRole.PARENT },
-      select: ['m_uid', 'user_id', 'name']
-    });
-    
-    if (!parentUser?.m_uid) {
-      throw new ConflictException('스마트 디스펜서가 연동되지 않았습니다. 메인 계정에서 기기를 먼저 연동해주세요.');
-    }
-
-    const exists = await this.medicineRepo.findOne({
-      where: { medi_id: data.medi_id, connect: data.connect },
+    // 부모 권한 확인
+    const parentMembership = await this.membershipRepo.findOne({
+      where: { group_id: group.group_id, role: UserRole.PARENT },
+      relations: ['user']
     });
 
-    if (exists) {
-      throw new ConflictException('이미 등록된 영양제입니다.');
+    if (!parentMembership) {
+      throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
     }
 
-    // 🔥 자동 슬롯 할당: 영양제 + 의약품 합쳐서 최대 3개 제한
-    let assignedSlot: number;
+    // 이미 존재하는 영양제인지 확인
+    const existingSupplement = await this.medicineRepo.findOne({
+      where: { medi_id: data.medi_id, group_id: group.group_id },
+    });
+
+    if (existingSupplement) {
+      throw new BadRequestException('이미 등록된 영양제입니다.');
+    }
+
+    // 🎯 공통 슬롯 할당 서비스 사용 - 의약품과 동일하게 처리
+    // const totalQuantity = parseInt(data.totalQuantity); // 🔥 제거: 즉시 설정하지 않음
     
-    if (data.slot && data.slot >= 1 && data.slot <= 3) {
-      // 사용자가 지정한 슬롯이 있고 유효한 경우
-      const existingMachine = await this.machineRepo.findOne({
-        where: { owner: data.connect, slot: data.slot },
-      });
-      
-      if (existingMachine) {
-        throw new ConflictException(`${data.slot}번 슬롯은 이미 사용 중입니다.`);
-      }
-      assignedSlot = data.slot;
-    } else {
-      // 🔥 영양제 + 의약품 전체 슬롯 사용 현황 조회 
-      const usedMachines = await this.machineRepo.find({
-        where: { owner: data.connect },
-        select: ['machine_id', 'slot', 'medi_id']
-      });
-      
-      console.log(`🔍 영양제+의약품 - connect: ${data.connect}의 전체 Machine 레코드:`, usedMachines);
-      
-      const usedSlots = usedMachines.map(machine => machine.slot).filter(slot => slot !== null);
-      console.log(`🔍 영양제+의약품 - 현재 사용 중인 슬롯들:`, usedSlots);
-      
-      // 🔥 이미 3개 슬롯이 모두 사용 중인 경우 에러
-      if (usedSlots.length >= 3) {
-        throw new ConflictException('의약품과 영양제는 총 3개까지만 등록 가능합니다.');
-      }
-      
-      // 1번부터 3번까지 순차적으로 빈 슬롯 찾기
-      assignedSlot = 1;
-      while (usedSlots.includes(assignedSlot) && assignedSlot <= 3) {
-        console.log(`🔍 영양제+의약품 - 슬롯 ${assignedSlot}번은 이미 사용 중, 다음 슬롯 확인...`);
-        assignedSlot++;
-      }
-      
-      if (assignedSlot > 3) {
-        throw new ConflictException('의약품과 영양제는 총 3개까지만 등록 가능합니다.');
-      }
-      
-      console.log(`🔥 영양제 자동 할당된 슬롯: ${assignedSlot}번 (connect: ${data.connect})`);
+    // 1. 슬롯 할당
+    const slotResult = await this.machineService.assignSlot(group.group_id, data.slot);
+    
+    if (!slotResult.success) {
+      throw new BadRequestException(slotResult.error || '슬롯 할당 실패');
     }
 
-    // medicine 테이블에 저장 (🔥 target_users 추가)
+    // 영양제 등록
     const supplement = this.medicineRepo.create({
       medi_id: data.medi_id,
-      connect: data.connect,
+      group_id: group.group_id,
       name: data.name,
-      warning: data.warning ?? false,
-      start_date: data.start_date ? new Date(data.start_date) : null,
-      end_date: data.end_date ? new Date(data.end_date) : null,
-      target_users: target_users, // 🔥 영양제도 유저 선택 기능 추가
-    } as Medicine);
+      warning: 0,
+      start_date: new Date(),
+      end_date: null,
+      target_users: null,
+      listed_only: 1
+    });
 
     const savedSupplement = await this.medicineRepo.save(supplement);
-    
-    if (target_users === null) {
-      console.log(`🔥 영양제 저장 완료 - connect: ${data.connect}, medi_id: ${medi_id}, 가족 공통 영양제`);
-    } else {
-      console.log(`🔥 영양제 저장 완료 - connect: ${data.connect}, medi_id: ${medi_id}, 개인 지정 영양제:`, target_users);
+
+    // 2. 슬롯 예약 - 🔥 의약품과 동일하게 0으로 시작 (나중에 업데이트)
+    const initialTotal = 0; // 🔥 의약품과 동일: 0으로 시작
+    const reserveResult = await this.machineService.reserveSlot(
+      group.group_id, 
+      data.medi_id, 
+      slotResult.slot!, 
+      initialTotal
+    );
+
+    if (!reserveResult.success) {
+      throw new BadRequestException(reserveResult.error || '슬롯 예약 실패');
     }
 
-    // 🔥 영양제도 Machine 테이블에 슬롯 정보 저장
-    const newMachine = this.machineRepo.create({
-      machine_id: parentUser.m_uid, // 기존 기기 ID 재사용
-      medi_id: medi_id, // 🔥 복합키이므로 반드시 필요
-      owner: data.connect,
-      slot: assignedSlot,
-      total: 100, // 영양제 기본 총량
-      remain: 100, // 영양제 기본 잔여량
-      error_status: '',
-      last_error_at: new Date()
-    });
-
-    await this.machineRepo.save(newMachine);
-    console.log(`🔥 영양제 Machine 레코드 생성: ${parentUser.m_uid} - 슬롯 ${assignedSlot}번에 ${medi_id} 등록`);
-
-    // 🔥 할당된 슬롯 정보를 포함한 응답 반환
-    return {
-      ...savedSupplement,
-      slot: assignedSlot // 프론트엔드에서 할당된 슬롯 정보 확인 가능
-    } as any;
-  }
-
-  // 3. 영양제 상세 조회
-  async getSupplementDetails(
-    connect: string,
-    medi_id: string,
-  ): Promise<Medicine> {
-    const supplement = await this.medicineRepo.findOne({
-      where: { connect, medi_id },
-    });
-
-    if (!supplement) {
-      throw new NotFoundException('영양제를 찾을 수 없습니다.');
-    }
-
-    return supplement;
-  }
-
-  // 4. 스케줄 저장 (Mock)
-  async saveSupplementSchedule(): Promise<{
-    success: boolean;
-    message: string;
-  }> {
-    // 실제 영양제 스케줄 저장 로직을 여기에 구현
-    // 예: 데이터베이스 저장 등
-    await Promise.resolve(); // 비동기 작업을 시뮬레이션
-
-    // data 사용 로직은 실제 구현 시 추가...
+    console.log(`🔥 [SupplementService] 영양제 슬롯 할당: ${data.medi_id} → 슬롯 ${slotResult.slot}번 (총량: ${initialTotal})`);
+    console.log(`🔥 [SupplementService] 총량은 나중에 별도 업데이트에서 설정됩니다.`);
 
     return {
       success: true,
-      message: '영양제 스케줄이 저장되었습니다.',
+      data: {
+        supplement: savedSupplement,
+        slot: slotResult.slot,
+        total: initialTotal, // 🔥 의약품과 동일: 0으로 반환
+      },
+      message: `영양제가 ${slotResult.slot}번 슬롯에 등록되었습니다. (총량은 나중에 설정)`,
     };
   }
 
-  // 5. 잔여량 정보 조회 (경고 상태만 제공)
-  async getSupplementInventory(
-    connect: string,
-  ): Promise<{ medi_id: string; name: string; warning: boolean }[]> {
-    const supplements = await this.medicineRepo.find({ where: { connect } });
-    return supplements.map((m) => ({
-      medi_id: m.medi_id,
-      name: m.name,
-      warning: !!m.warning,
-    }));
-  }
-
-  // 6. 경고 상태 수동 업데이트
-  async updateWarning(
-    connect: string,
-    data: { supplementId: string; warning: boolean },
-  ) {
+  // 영양제 수정
+  async updateSupplement(userId: string, medi_id: string, data: {
+    name?: string;
+    totalQuantity?: string;
+  }) {
+    const { group } = await this.getUserGroup(userId);
+    
     const supplement = await this.medicineRepo.findOne({
-      where: { medi_id: data.supplementId, connect },
+      where: { group_id: group.group_id, medi_id },
     });
 
     if (!supplement) {
       throw new NotFoundException('영양제를 찾을 수 없습니다.');
     }
 
-    supplement.warning = data.warning;
-    return this.medicineRepo.save(supplement);
-  }
-
-  // 7. 복용 완료 처리 → 경고 true 전환
-  async completeSupplement(connect: string, data: { supplementId: string }) {
-    const supplement = await this.medicineRepo.findOne({
-      where: { medi_id: data.supplementId, connect },
-    });
-
-    if (!supplement) {
-      throw new NotFoundException('영양제를 찾을 수 없습니다.');
+    // 영양제 정보 업데이트
+    if (data.name) {
+      supplement.name = data.name;
     }
 
-    if (supplement.warning === true) {
+    const updatedSupplement = await this.medicineRepo.save(supplement);
+
+    // 총량 업데이트 (있는 경우)
+    if (data.totalQuantity) {
+      const machineSlot = await this.machineSlotRepo.findOne({
+        where: { medi_id }
+      });
+
+      if (machineSlot) {
+        const newTotal = parseInt(data.totalQuantity);
+        machineSlot.total = newTotal;
+        machineSlot.remain = newTotal;
+        await this.machineSlotRepo.save(machineSlot);
+      }
+    }
+
+    return updatedSupplement;
+  }
+
+  // 영양제 총량 업데이트 (의약품과 동일한 방식)
+  async updateSupplementQuantity(userId: string, mediId: string, totalQuantity: number) {
+    try {
+      const { group } = await this.getUserGroup(userId);
+      
+      // 부모 권한 확인
+      const parentMembership = await this.membershipRepo.findOne({
+        where: { group_id: group.group_id, role: UserRole.PARENT },
+        relations: ['user']
+      });
+
+      if (!parentMembership) {
+        throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
+      }
+
+      // 영양제 존재 여부 확인
+      const supplement = await this.medicineRepo.findOne({
+        where: { medi_id: mediId, group_id: group.group_id },
+      });
+
+      if (!supplement) {
+        throw new NotFoundException('등록된 영양제를 찾을 수 없습니다.');
+      }
+
+      // 슬롯 총량 업데이트
+      const updateResult = await this.machineService.updateSlotQuantity(
+        group.group_id,
+        mediId,
+        totalQuantity
+      );
+
+      if (!updateResult.success) {
+        throw new BadRequestException(updateResult.error || '슬롯 총량 업데이트 실패');
+      }
+
+      console.log(`🔥 [SupplementService] 영양제 총량 업데이트: ${mediId} → ${totalQuantity}개`);
+
       return {
-        success: false,
-        message: '이미 복용 완료되었거나 재고가 부족합니다.',
+        success: true,
+        data: {
+          mediId,
+          totalQuantity,
+          updatedAt: new Date()
+        },
+        message: `영양제 총량이 ${totalQuantity}개로 업데이트되었습니다.`,
       };
+    } catch (error) {
+      console.error('🔥 [SupplementService] 영양제 총량 업데이트 오류:', error);
+      throw error;
+    }
+  }
+
+  // 영양제 목록 조회 (간단한 버전)
+  async getSupplementList(userId: string) {
+    const { group } = await this.getUserGroup(userId);
+    
+    const supplements = await this.medicineRepo.find({ 
+      where: { group_id: group.group_id } 
+    });
+    
+    return supplements;
+  }
+
+  // 영양제 삭제
+  async deleteSupplement(userId: string, data: { supplementId: string }) {
+    const { group } = await this.getUserGroup(userId);
+    
+    const supplement = await this.medicineRepo.findOne({
+      where: { medi_id: data.supplementId, group_id: group.group_id },
+    });
+
+    if (!supplement) {
+      throw new NotFoundException('영양제를 찾을 수 없습니다.');
     }
 
-    supplement.warning = true; // 복용 완료로 표시
-    await this.medicineRepo.save(supplement);
+    // 기계 슬롯에서도 제거
+    await this.machineSlotRepo.delete({ medi_id: data.supplementId });
+    
+    // 영양제 삭제
+    await this.medicineRepo.remove(supplement);
+    
+    return { message: '영양제가 삭제되었습니다.' };
+  }
+
+  // 영양제 상세 정보 조회
+  async getSupplementDetail(userId: string, data: { supplementId: string }) {
+    const { group } = await this.getUserGroup(userId);
+    
+    const supplement = await this.medicineRepo.findOne({
+      where: { medi_id: data.supplementId, group_id: group.group_id },
+    });
+
+    if (!supplement) {
+      throw new NotFoundException('영양제를 찾을 수 없습니다.');
+    }
+
+    // 기계 슬롯 정보도 함께 조회
+    const machineSlot = await this.machineSlotRepo.findOne({
+      where: { medi_id: data.supplementId },
+      relations: ['machine']
+    });
 
     return {
-      success: true,
-      completedAt: new Date(),
-      supplementId: data.supplementId,
+      ...supplement,
+      slot: machineSlot?.slot_number || null,
+      total: machineSlot?.total || null,
+      remain: machineSlot?.remain || null,
+      machine_id: machineSlot?.machine_id || null,
     };
   }
 }

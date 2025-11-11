@@ -1,26 +1,33 @@
-// src/medicine/medicine.module.ts
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { MedicineController } from './medicine.controller';
 import { MedicineService } from './medicine.service';
-import { Medicine } from './entities/medicine.entity';
+import { MedicineController } from './medicine.controller';
+import { Medicine } from '../shared/entities/medicine.entity';
 import { Machine } from '../machine/entities/machine.entity';
+import { MachineSlot } from '../machine/entities/machine-slot.entity';
 import { User } from '../users/entities/users.entity';
-import { Schedule } from 'src/schedule/entities/schedule.entity';
-import { ConfigModule } from '@nestjs/config';
+import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
-import { AccessTokenGuard } from 'src/auth/guard/bearer-token.guard';
+import { ScheduleModule } from '../schedule/schedule.module';
+import { MachineModule } from '../machine/machine.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Medicine, Machine, User, Schedule]),
-    ConfigModule,
+    TypeOrmModule.forFeature([
+      Medicine,
+      Machine,
+      MachineSlot,
+      User,
+      UserGroupMembership,
+    ]),
     AuthModule,
     UsersModule,
+    ScheduleModule,
+    MachineModule,
   ],
   controllers: [MedicineController],
-  providers: [MedicineService, AccessTokenGuard],
+  providers: [MedicineService],
   exports: [MedicineService],
 })
-export class MedicineModule {}
+export class MedicineModule {} 

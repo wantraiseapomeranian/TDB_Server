@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { DoseHistory, DoseStatus } from './dose-history.entity';
 import { Schedule } from '../schedule/entities/schedule.entity';
 import { User } from '../users/entities/users.entity';
+import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
+import { UserRole } from '../users/entities/user-role.enum';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -15,7 +17,31 @@ export class DoseHistoryService {
     private readonly scheduleRepository: Repository<Schedule>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(UserGroupMembership)
+    private readonly membershipRepository: Repository<UserGroupMembership>,
   ) {}
+
+  // 사용자의 그룹 정보 조회 헬퍼 메서드
+  private async getUserGroup(userId: string) {
+    const user = await this.userRepository.findOne({
+      where: { user_id: userId }
+    });
+    
+    if (!user) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    }
+
+    const membership = await this.membershipRepository.findOne({
+      where: { user_id: userId },
+      relations: ['group']
+    });
+
+    if (!membership) {
+      throw new NotFoundException('사용자의 그룹 정보를 찾을 수 없습니다.');
+    }
+
+    return { user, membership, group_id: membership.group_id };
+  }
 
   // 복용 완료 처리
   async completeDose(
@@ -25,18 +51,23 @@ export class DoseHistoryService {
     actual_dose: number,
     notes?: string,
   ): Promise<DoseHistory> {
-    const today = new Date().toISOString().split('T')[0];
+    // 🔥 오늘 날짜 문자열
+    const todayString = new Date().toISOString().split('T')[0];
+    // 🔥 Date 객체로 변환 (자정 00:00:00)
+    const todayDate = new Date(todayString);
     
     try {
-      // 기존 기록이 있는지 확인
-      let doseHistory = await this.doseHistoryRepository.findOne({
-        where: {
-          user_id,
-          medi_id,
-          time_of_day,
-          dose_date: today,
-        },
-      });
+      // 사용자의 그룹 정보 조회
+      const { group_id } = await this.getUserGroup(user_id);
+
+      // 🔥 기존 기록이 있는지 확인 (DATE 함수로 날짜 부분만 비교)
+      let doseHistory = await this.doseHistoryRepository
+        .createQueryBuilder('dh')
+        .where('dh.user_id = :user_id', { user_id })
+        .andWhere('dh.medi_id = :medi_id', { medi_id })
+        .andWhere('dh.time_of_day = :time_of_day', { time_of_day })
+        .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
+        .getOne();
 
       if (doseHistory) {
         // 기존 기록 업데이트
@@ -45,24 +76,14 @@ export class DoseHistoryService {
         doseHistory.completed_at = new Date();
         if (notes) doseHistory.notes = notes;
       } else {
-        // 🔥 실제 사용자의 connect 값 조회
-        const user = await this.userRepository.findOne({
-          where: { user_id },
-          select: ['connect']
-        });
-        
-        if (!user || !user.connect) {
-          throw new Error('사용자 정보를 찾을 수 없습니다.');
-        }
-        
         // 새 기록 생성
         doseHistory = new DoseHistory();
         doseHistory.history_id = uuidv4();
-        doseHistory.connect = user.connect; // 🔥 실제 connect 값 사용
+        doseHistory.group_id = group_id;
         doseHistory.user_id = user_id;
         doseHistory.medi_id = medi_id;
         doseHistory.time_of_day = time_of_day;
-        doseHistory.dose_date = today;
+        doseHistory.dose_date = todayDate;
         doseHistory.scheduled_dose = actual_dose; // 임시로 같은 값 사용
         doseHistory.actual_dose = actual_dose;
         doseHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
@@ -155,19 +176,105 @@ export class DoseHistoryService {
   async getTodayProgress(user_id: string) {
     try {
       const today = new Date().toISOString().split('T')[0];
+      const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
 
+      // 🔥 1. 오늘의 스케줄 조회 (Schedule 테이블)
+      const todaySchedules = await this.scheduleRepository
+        .createQueryBuilder('schedule')
+        .leftJoinAndSelect('schedule.medicine', 'medicine')
+        .where('schedule.user_id = :user_id', { user_id })
+        .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
+        .getMany();
+
+      console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
+
+      // 🔥 2. 오늘의 복용 기록 조회 (DoseHistory 테이블)
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.user_id = :user_id', { user_id })
         .andWhere('dh.dose_date = :today', { today })
         .getMany();
 
-      const scheduled = todayHistories.length;
-      const completed = todayHistories.filter(h => h.status === DoseStatus.COMPLETED).length;
-      const missed = todayHistories.filter(h => h.status === DoseStatus.MISSED).length;
+      console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
+
+      // 🔥 3. 스케줄과 복용 기록 병합 (실제 기록만 인정)
+            const now = new Date();
+      const todayStart = new Date(today); // 오늘 00:00:00
+      
+      // 복용 시간 매핑 (기본값, 실제로는 사용자 설정값 사용 가능)
+      const timeSlotHours = {
+        morning: 8,
+        afternoon: 13,
+        evening: 19
+      };
+      
+      const todaySchedulesWithStatus = todaySchedules
+        .map(schedule => {
+          const history = todayHistories.find(
+            h => h.medi_id === schedule.medi_id && h.time_of_day === schedule.time_of_day
+          );
+
+          // 🔥 히스토리가 있으면 그 status 사용, 없으면 null (프론트에서 처리)
+          // 시간이 지났다고 자동으로 'missed'로 판단하지 않음!
+          const status: DoseStatus | null = history?.status || null;
+
+          return {
+            medi_id: schedule.medi_id,
+            medi_name: schedule.medicine?.name || '약 이름 없음',
+            time_of_day: schedule.time_of_day,
+            scheduled_dose: schedule.dose,
+            actual_dose: history?.actual_dose,
+            status: status, // null = 아직 기록 안 됨 (복용 예정 또는 확인 필요)
+            completed_at: history?.completed_at?.toISOString(),
+            schedule_created_at: schedule.created_at, // 🔥 스케줄 생성 시간 추가
+          };
+        })
+        .filter(schedule => {
+          // 🔥 약 이름이 없는 항목은 제외
+          if (!schedule.medi_name || schedule.medi_name === '약 이름 없음') {
+            console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
+            return false;
+          }
+          
+          // 🔥 스케줄이 오늘 생성되었고, 생성 시간이 해당 복용 시간보다 늦으면 제외
+          const scheduleCreatedAt = new Date(schedule.schedule_created_at);
+          const isCreatedToday = scheduleCreatedAt >= todayStart && scheduleCreatedAt <= now;
+          
+          if (isCreatedToday && !schedule.status) {
+            // 복용 기록이 없고, 오늘 생성된 스케줄인 경우
+            const timeSlotHour = timeSlotHours[schedule.time_of_day] || 12;
+            const doseTime = new Date(today);
+            doseTime.setHours(timeSlotHour, 0, 0, 0);
+            
+            // 스케줄 생성 시간이 복용 시간보다 늦으면 제외
+            if (scheduleCreatedAt > doseTime) {
+              console.log(`⏭️ [getTodayProgress] 오늘 생성된 스케줄이지만 이미 지난 시간대 제외: ${schedule.time_of_day} (${schedule.medi_name})`);
+              return false;
+            }
+          }
+          
+          return true;
+        });
+
+      // 🔥 필터링 후의 스케줄 개수로 계산 (시간 기준 status 반영)
+      const scheduled = todaySchedulesWithStatus.length;
+      const completed = todaySchedulesWithStatus.filter(s => s.status === DoseStatus.COMPLETED).length;
+      const missed = todaySchedulesWithStatus.filter(s => s.status === DoseStatus.MISSED).length;
       const completion_rate = scheduled > 0 ? Math.round((completed / scheduled) * 100) : 0;
 
       return {
+        user_id,
+        user_name: null, // 호출자가 채워줌
+        todaySchedules: todaySchedulesWithStatus,
+        summary: {
+          totalScheduled: scheduled,
+          completed,
+          missed,
+          partial: 0,
+          pending: scheduled - completed - missed,
+          progressPercentage: completion_rate,
+        },
+        // 🔥 호환성을 위해 기존 필드도 유지
         scheduled,
         completed,
         missed,
@@ -176,6 +283,17 @@ export class DoseHistoryService {
     } catch (error) {
       console.error('오늘 진행률 조회 오류:', error);
       return {
+        user_id,
+        user_name: null,
+        todaySchedules: [],
+        summary: {
+          totalScheduled: 0,
+          completed: 0,
+          missed: 0,
+          partial: 0,
+          pending: 0,
+          progressPercentage: 0,
+        },
         scheduled: 0,
         completed: 0,
         missed: 0,
@@ -184,15 +302,15 @@ export class DoseHistoryService {
     }
   }
 
-  // 가족 전체 복용 통계
-  async getFamilyStats(connect: string) {
+  // 가족 전체 복용 통계 (그룹 기반)
+  async getFamilyStats(group_id: string) {
     try {
       const today = new Date().toISOString().split('T')[0];
 
-      // 간단한 버전: 해당 connect의 모든 기록 조회
+      // 해당 그룹의 모든 기록 조회
       const histories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
-        .where('dh.connect = :connect', { connect })
+        .where('dh.group_id = :group_id', { group_id })
         .andWhere('dh.dose_date = :today', { today })
         .getMany();
 
@@ -219,32 +337,36 @@ export class DoseHistoryService {
   }
 
   // 🔥 더 상세한 가족 통계 (시간대별, 멤버별 분석)
-  async getDetailedFamilyStats(connect: string) {
+  async getDetailedFamilyStats(group_id: string) {
     try {
       const today = new Date().toISOString().split('T')[0];
       const currentHour = new Date().getHours();
+      const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
 
-      // 가족 구성원 정보 조회
-      const familyMembers = await this.userRepository
-        .createQueryBuilder('u')
-        .where('u.connect = :connect', { connect })
-        .select(['u.user_id', 'u.name', 'u.role'])
-        .getMany();
+      // 가족 구성원 정보 조회 (멤버십을 통해 role 정보 포함)
+      const familyMembers = await this.membershipRepository
+        .createQueryBuilder('membership')
+        .innerJoin('membership.user', 'user')
+        .where('membership.group_id = :group_id', { group_id })
+        .select(['user.user_id', 'user.name', 'membership.role'])
+        .getRawMany();
 
       // 오늘의 모든 복용 기록 조회
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
-        .where('dh.connect = :connect', { connect })
+        .where('dh.group_id = :group_id', { group_id })
         .andWhere('dh.dose_date = :today', { today })
         .getMany();
 
-      // 예정된 모든 스케줄 조회 (Schedule 테이블에서)
+      // 🔥 오늘 요일의 스케줄만 조회 (수정됨!)
       const scheduledDoses = await this.scheduleRepository
         .createQueryBuilder('s')
-        .innerJoin('s.user', 'u')
-        .where('u.connect = :connect', { connect })
+        .where('s.group_id = :group_id', { group_id })
+        .andWhere('s.day_of_week = :dayOfWeek', { dayOfWeek })
         .select(['s.user_id', 's.medi_id', 's.time_of_day', 's.dose'])
         .getMany();
+      
+      console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
 
       // 시간대별 분석
       const timeSlots = {
@@ -263,8 +385,8 @@ export class DoseHistoryService {
           h.time_of_day === timeOfDay && h.status === DoseStatus.MISSED
         );
 
-        // 현재 시간 기준으로 "남은 복용"과 "놓친 복용" 구분
-        const isPastTime = currentHour > timeInfo.end;
+        // 🔥 실제 기록만 사용 (시간 기반 자동 판단 제거)
+        // remaining = 스케줄은 있는데 아직 기록(completed/missed) 안 된 것
         const remainingForTime = scheduledForTime.length - completedForTime.length - missedForTime.length;
         
         return {
@@ -272,8 +394,8 @@ export class DoseHistoryService {
           label: timeInfo.label,
           scheduled: scheduledForTime.length,
           completed: completedForTime.length,
-          missed: isPastTime ? remainingForTime + missedForTime.length : missedForTime.length,
-          remaining: isPastTime ? 0 : remainingForTime,
+          missed: missedForTime.length, // 실제로 'missed'로 기록된 것만
+          remaining: Math.max(remainingForTime, 0), // 아직 기록 안 된 것 (복용 예정 또는 확인 필요)
           completionRate: scheduledForTime.length > 0 ? 
             Math.round((completedForTime.length / scheduledForTime.length) * 100) : 0
         };
@@ -281,12 +403,12 @@ export class DoseHistoryService {
 
       // 멤버별 상세 통계
       const memberStats = familyMembers.map(member => {
-        const memberScheduled = scheduledDoses.filter(s => s.user_id === member.user_id);
+        const memberScheduled = scheduledDoses.filter(s => s.user_id === member.user_user_id);
         const memberCompleted = todayHistories.filter(h => 
-          h.user_id === member.user_id && h.status === DoseStatus.COMPLETED
+          h.user_id === member.user_user_id && h.status === DoseStatus.COMPLETED
         );
         const memberMissed = todayHistories.filter(h => 
-          h.user_id === member.user_id && h.status === DoseStatus.MISSED
+          h.user_id === member.user_user_id && h.status === DoseStatus.MISSED
         );
 
         const totalScheduled = memberScheduled.length;
@@ -295,9 +417,9 @@ export class DoseHistoryService {
         const remaining = totalScheduled - totalCompleted - totalMissed;
 
         return {
-          user_id: member.user_id,
-          name: member.name,
-          role: member.role,
+          user_id: member.user_user_id,
+          name: member.user_name,
+          role: member.membership_role,
           scheduled: totalScheduled,
           completed: totalCompleted,
           missed: totalMissed,

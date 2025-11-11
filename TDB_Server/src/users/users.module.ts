@@ -2,15 +2,17 @@
 
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { UsersController, UsersCompatController } from './users.controller';
 import { UsersService } from './users.service';
-import { UsersController } from './users.controller';
 import { User } from './entities/users.entity';
+import { UserGroup } from './entities/user-group.entity';
+import { UserGroupMembership } from './entities/user-group-membership.entity';
 import { Machine } from '../machine/entities/machine.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Machine])],
+  imports: [TypeOrmModule.forFeature([User, UserGroup, UserGroupMembership, Machine])],
+  controllers: [UsersController, UsersCompatController],
   providers: [UsersService],
-  controllers: [UsersController],
-  exports: [UsersService], // AuthModule에서 사용할 수 있도록 export
+  exports: [UsersService, TypeOrmModule],
 })
 export class UsersModule {}
