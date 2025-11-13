@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MedicineService } from './medicine.service';
 import { MedicineController } from './medicine.controller';
@@ -28,7 +28,7 @@ import { MachineModule } from '../machine/machine.module';
     AuthModule,
     UsersModule,
     ScheduleModule,
-    MachineModule,
+    forwardRef(() => MachineModule), // 순환 참조 문제로 주석 처리
   ],
   controllers: [MedicineController],
   providers: [MedicineService],

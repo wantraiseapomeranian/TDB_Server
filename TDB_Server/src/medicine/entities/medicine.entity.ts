@@ -2,13 +2,9 @@ import {
   Entity,
   Column,
   PrimaryColumn,
-  ManyToOne,
-  JoinColumn,
   OneToMany,
 } from 'typeorm';
-import { User } from 'src/users/entities/users.entity';
 import { Schedule } from 'src/schedule/entities/schedule.entity';
-import { Machine } from 'src/machine/entities/machine.entity';
 import { DoseHistory } from 'src/dose-history/dose-history.entity';
 
 @Entity('medicine')
@@ -40,19 +36,8 @@ export class Medicine {
   })
   target_users?: string[] | null;
 
-  // FK 관계 정의 (connect → users.connect)
-  @ManyToOne(() => User, (user) => user.medicines, {
-    onDelete: 'CASCADE',
-  })
-  @JoinColumn({ name: 'connect', referencedColumnName: 'connect' })
-  user: User;
-
   @OneToMany(() => Schedule, (schedule) => schedule.medicine)
   schedules: Schedule[];
-
-   // 2. machine.entity.ts (30줄) 오류 해결을 위해 이 코드를 추가합니다.
-  @OneToMany(() => Machine, (machine) => machine.medicine) // 'medicine'은 Machine 엔티티의 속성 이름
-  machines: Machine[];
 
   @OneToMany(() => DoseHistory, (doseHistory) => doseHistory.medicine)
   doseHistories: DoseHistory[];
