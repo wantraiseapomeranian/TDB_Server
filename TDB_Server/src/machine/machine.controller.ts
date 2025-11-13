@@ -105,10 +105,32 @@ export class MachineController {
     return this.machineService.getMedicineRemainByMachine(machine_id);
   }
 
-  // 기기 ID 기준, 연동된 사용자 목록 조회
-  @Get('users/:machine_id')
-  getUsersByMachine(@Param('machine_id') machine_id: string) {
-    return this.machineService.getUsersByMachineId(machine_id);
+  // 1. 경로 수정: 기기별 사용자 목록 조회
+  @Get(':id/users')
+  getUsersByMachine(@Param('id') id: string) {
+    return this.machineService.getUsersByMachineId(id);
+  }
+
+  // 2. 신규: 기기별 슬롯 정보 조회
+  @Get(':id/slots')
+  getMachineSlots(@Param('id') id: string) {
+    return this.machineService.getMedicineRemainByMachine(id);
+  }
+
+  // 3. 신규: 오늘의 전체 스케줄 조회
+  @Get(':id/schedules/today')
+  getTodaySchedulesForMachine(@Param('id') id: string) {
+    return this.machineService.getTodaySchedulesForMachine(id);
+  }
+
+  // 4. 신규: 최근 배출 기록 조회
+  @Get(':id/dose-history')
+  getDoseHistoryForMachine(
+    @Param('id') id: string,
+    @Query('limit') limit: string,
+  ) {
+    const limitValue = limit ? parseInt(limit, 10) : 2;
+    return this.machineService.getDoseHistoryForMachine(id, limitValue);
   }
 
   // 기기 ID 기준, 특정 날짜의 복용 스케줄 요약 조회

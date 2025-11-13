@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, Like } from 'typeorm';
 import { User } from '../users/entities/users.entity';
 import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
 import { Schedule } from '../schedule/entities/schedule.entity';
@@ -575,6 +575,53 @@ export class MachineService {
         error: error instanceof Error ? error.message : '슬롯 총량 업데이트 실패' 
       };
     }
+  }
+
+  // ===================================================================
+  // 🔥 TDB-Client GUI 연동 API
+  // ===================================================================
+
+  // 오늘의 전체 스케줄 조회
+  async getTodaySchedulesForMachine(machine_id: string): Promise<any> {
+    const machine = await this.machineRepository.findOne({ where: { machine_id } });
+    if (!machine) {
+      throw new NotFoundException(`Machine with ID ${machine_id} not found`);
+    }
+    const weekday = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+    const schedules = await this.scheduleRepository.find({
+      where: {
+        group_id: machine.group_id,
+        day_of_week: Like(`%${weekday}%`) as any,
+      },
+      relations: ['user', 'medicine'],
+      order: { time_of_day: 'ASC' },
+    });
+    return schedules.map(s => ({
+      time_of_day: s.time_of_day,
+      user_name: s.user.name,
+      medicine_name: s.medicine.name,
+    }));
+  }
+
+  // 최근 배출 기록 조회
+  async getDoseHistoryForMachine(machine_id: string, limit: number): Promise<any> {
+    // DoseHistory 엔티티와 Repository가 필요합니다.
+    // 아래는 DoseHistoryRepository가 주입되었다고 가정한 예시 코드입니다.
+    // (실제로는 dose-history.service.ts 에 구현하는 것이 더 적합합니다.)
+      /*
+    return this.doseHistoryRepository.find({
+      where: { machine_id },
+      relations: ['user'],
+      order: { dispensed_at: 'DESC' },
+      take: limit,
+    });
+    */
+      // 임시 응답 (DoseHistory 모듈이 없으므로)
+    console.warn(`getDoseHistoryForMachine is returning mock data for machine ${machine_id}.`);
+    return [
+      { dispensed_at: new Date().toISOString(), user_name: "김경동 (mock)", result: "completed" },
+      { dispensed_at: new Date().toISOString(), user_name: "강현성 (mock)", result: "failed" },
+    ].slice(0, limit);
   }
 
   // ===================================================================

@@ -50,7 +50,8 @@ export class Medicine {
   @OneToMany(() => Schedule, (schedule) => schedule.medicine)
   schedules: Schedule[];
 
-  @OneToMany(() => Machine, (machine) => machine.medicine)
+   // 2. machine.entity.ts (30줄) 오류 해결을 위해 이 코드를 추가합니다.
+  @OneToMany(() => Machine, (machine) => machine.medicine) // 'medicine'은 Machine 엔티티의 속성 이름
   machines: Machine[];
 
   @OneToMany(() => DoseHistory, (doseHistory) => doseHistory.medicine)

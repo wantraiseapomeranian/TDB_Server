@@ -7,6 +7,7 @@ import {
 import { Machine } from 'src/machine/entities/machine.entity';
 import { Schedule } from 'src/schedule/entities/schedule.entity';
 import { DoseHistory } from 'src/dose-history/dose-history.entity';
+import { Medicine } from 'src/medicine/entities/medicine.entity';
 
 @Entity('users')
 export class User {
@@ -40,4 +41,7 @@ export class User {
 
   @OneToMany(() => DoseHistory, (doseHistory) => doseHistory.user)
   doseHistories: DoseHistory[];
+
+  @OneToMany(() => Medicine, (medicine) => medicine.user) // 'user'는 Medicine 엔티티의 속성 이름
+medicines: Medicine[];
 }
