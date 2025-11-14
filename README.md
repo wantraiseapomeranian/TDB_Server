@@ -1,4 +1,4 @@
-# 🏥 TDB 통합 서버 (TDB Integrated Server)
+# 🏥 TDB 서버 (TDBServer)
 
 [![NestJS](https://img.shields.io/badge/NestJS-v10-E0234E?style=flat-square&logo=nestjs&logoColor=white)](https://nestjs.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-v5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -9,7 +9,7 @@
 
 ## 📋 프로젝트 개요 (Overview)
 
-**TDB 통합 서버**는 스마트 약 디스펜서 시스템의 백엔드입니다. **React Native 모바일 앱**과 **라즈베리파이 하드웨어** 클라이언트를 모두 지원하며, 다음과 같은 목표를 가집니다.
+**TDB 서버**는 스마트 약 디스펜서 시스템의 백엔드입니다. **React Native 모바일 앱**과 **라즈베리파이 하드웨어** 클라이언트를 모두 지원하며, 다음과 같은 목표를 가집니다.
 
 - **통합 관리**: 앱과 디바이스(라즈베리파이)의 데이터를 중앙에서 관리합니다.
 - **실시간 동기화**: 복용 스케줄, 약물 정보, 기기 상태 등을 실시간으로 동기화합니다.
@@ -80,14 +80,33 @@ src/
 ### 2. 설치 (Installation)
 ```bash
 # 1. 프로젝트 클론
-git clone <https://github.com/wantraiseapomeranian/TDB_Server.git>
-cd TDB-Server
+git clone https://github.com/wantraiseapomeranian/TDB_Server.git
+cd TDB_Server
 
 # 2. 패키지 설치
 npm install
 ```
 
-### 3. 데이터베이스 설정 (Database Setup)
+### 3. 환경변수 설정 (Environment Variables)
+`.env` 파일을 프로젝트 루트에 생성하고 아래 내용을 채워주세요.
+```env
+# Server
+PORT=3000
+NODE_ENV=development
+
+# Database (MySQL)
+DB_HOST=localhost
+DB_PORT=3306
+DB_USERNAME=root
+DB_PASSWORD=your_db_password
+DB_DATABASE=TDB
+
+# JWT
+JWT_SECRET=your_jwt_secret_key
+HASH_ROUNDS=10
+```
+
+### 4. 데이터베이스 설정 (Database Setup)
 - `TDB`라는 이름의 데이터베이스를 생성해야 합니다.
 - TypeORM의 `synchronize` 옵션이 `false`로 설정되어 있으므로, 초기 스키마는 직접 생성해야 합니다. (관련 SQL 파일 필요)
 
