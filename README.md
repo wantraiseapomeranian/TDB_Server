@@ -1,4 +1,4 @@
-# 🏥 TDB 서버 (TDBServer)
+# 🏥 TDB 서버 (TDB_Server)
 
 [![NestJS](https://img.shields.io/badge/NestJS-v10-E0234E?style=flat-square&logo=nestjs&logoColor=white)](https://nestjs.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-v5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
