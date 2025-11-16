@@ -77,10 +77,13 @@ export class SupplementService {
   // async getUsedSlots() - 제거됨  
   // async autoAssignSlot() - 제거됨
 
-  // 영양제 추가 (공통 슬롯 할당 서비스 사용) - 🔥 의약품과 동일하게 0으로 시작
+  // 영양제 추가 (공통 슬롯 할당 서비스 사용) - 🔥 기본 정보만 저장
   async addSupplement(userId: string, data: {
     medi_id: string;
     name: string;
+    startDate?: string;
+    endDate?: string;
+    target_users?: string[] | null;
     totalQuantity: string;
     slot?: number;
   }) {
@@ -105,9 +108,7 @@ export class SupplementService {
       throw new BadRequestException('이미 등록된 영양제입니다.');
     }
 
-    // 🎯 공통 슬롯 할당 서비스 사용 - 의약품과 동일하게 처리
-    // const totalQuantity = parseInt(data.totalQuantity); // 🔥 제거: 즉시 설정하지 않음
-    
+    // 🎯 공통 슬롯 할당 서비스 사용
     // 1. 슬롯 할당
     const slotResult = await this.machineService.assignSlot(group.group_id, data.slot);
     
@@ -115,15 +116,19 @@ export class SupplementService {
       throw new BadRequestException(slotResult.error || '슬롯 할당 실패');
     }
 
-    // 영양제 등록
+    // 🔥 날짜 처리
+    const startDate = data.startDate ? new Date(data.startDate) : new Date();
+    const endDate = data.endDate ? new Date(data.endDate) : null;
+
+    // 영양제 등록 - 🔥 기본 정보만 저장 (제조사/성분/주의사항은 JSON에서 조회)
     const supplement = this.medicineRepo.create({
       medi_id: data.medi_id,
       group_id: group.group_id,
       name: data.name,
       warning: 0,
-      start_date: new Date(),
-      end_date: null,
-      target_users: null,
+      start_date: startDate,
+      end_date: endDate,
+      target_users: data.target_users ? JSON.stringify(data.target_users) : null,
       listed_only: 1
     });
 
@@ -143,6 +148,7 @@ export class SupplementService {
     }
 
     console.log(`🔥 [SupplementService] 영양제 슬롯 할당: ${data.medi_id} → 슬롯 ${slotResult.slot}번 (총량: ${initialTotal})`);
+    console.log(`🔥 [SupplementService] 시작일: ${startDate}, 종료일: ${endDate}`);
     console.log(`🔥 [SupplementService] 총량은 나중에 별도 업데이트에서 설정됩니다.`);
 
     return {

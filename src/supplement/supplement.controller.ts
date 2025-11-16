@@ -96,10 +96,13 @@ export class SupplementController {
       throw new BadRequestException('유효하지 않은 memberId입니다.');
     }
     
-    // addSupplement 메서드에 맞는 데이터 형식으로 변환 - 🔥 의약품과 동일하게 처리
+    // addSupplement 메서드에 맞는 데이터 형식으로 변환 - 🔥 기본 정보만 저장
     const supplementData = {
       medi_id: `supplement_${Date.now()}`, // 고유 ID 생성
       name: data.name,
+      startDate: data.startDate,
+      endDate: data.endDate,
+      target_users: data.target_users,
       totalQuantity: data.totalQuantity || '0', // 🔥 의약품과 동일: 0으로 시작 (나중에 업데이트)
       slot: data.slot, // 요청된 슬롯 (서비스에서 자동 할당 처리)
     };
@@ -147,10 +150,13 @@ export class SupplementController {
       throw new BadRequestException('유효하지 않은 memberId입니다.');
     }
     
-    // addSupplement 메서드에 맞는 데이터 형식으로 변환 (슬롯은 서비스에서 자동 할당)
+    // addSupplement 메서드에 맞는 데이터 형식으로 변환 - 🔥 기본 정보만 저장
     const supplementData = {
       medi_id: `supplement_${Date.now()}`, // 고유 ID 생성
       name: data.name,
+      startDate: data.startDate,
+      endDate: data.endDate,
+      target_users: data.target_users,
       totalQuantity: data.totalQuantity || '30', // 기본값 30개
       slot: data.slot, // 요청된 슬롯 (서비스에서 자동 할당 처리)
     };
