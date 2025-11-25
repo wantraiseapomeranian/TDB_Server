@@ -3,7 +3,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MachineController } from './machine.controller';
 import { MachineService } from './machine.service';
-import { Medicine } from 'src/medicine/entities/medicine.entity';
+import { Medicine } from '../shared/entities/medicine.entity';
 import { MachineSlot } from './entities/machine-slot.entity';
 import { User } from '../users/entities/users.entity';
 import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
