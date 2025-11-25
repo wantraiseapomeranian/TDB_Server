@@ -526,4 +526,22 @@ export class DoseHistoryService {
       } : [];
     }
   }
+
+  // ===================================================================
+  //  TDB-Client GUI 연동 API
+  // ===================================================================
+  async getDoseHistoryByMachineId(machine_id: string, limit: number) {
+    const histories = await this.doseHistoryRepository.createQueryBuilder('history')
+      .leftJoinAndSelect('history.user', 'user')
+      .where('history.group_id IN (SELECT group_id FROM machine WHERE machine_id = :machine_id)', { machine_id })
+      .orderBy('history.completed_at', 'DESC')
+      .take(limit)
+      .getMany();
+
+    return histories.map(h => ({
+      dispensed_at: h.completed_at,
+      user_name: h.user ? h.user.name : '알 수 없음',
+      result: h.status,
+    }));
+  }
 } 

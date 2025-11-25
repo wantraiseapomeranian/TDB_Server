@@ -211,4 +211,33 @@ export class DoseHistoryController {
   async completeDoseTaken(@Body() completeDoseDto: CompleteDoseDto) {
     return this.completeDose(completeDoseDto);
   }
+
+  // ===================================================================
+  //  TDB-Client GUI 연동 API
+  // ===================================================================
+  @Get('machine/:machine_id')
+  async getDoseHistoryForMachine(
+    @Param('machine_id') machine_id: string,
+    @Query('limit') limit: string,
+  ) {
+    try {
+      const limitValue = limit ? parseInt(limit, 10) : 5;
+      const result = await this.doseHistoryService.getDoseHistoryByMachineId(
+        machine_id,
+        limitValue,
+      );
+       
+      return {
+        success: true,
+        message: '최근 배출 기록을 조회했습니다.',
+        data: result,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message,
+        data: [],
+      };
+    }
+  }
 } 
