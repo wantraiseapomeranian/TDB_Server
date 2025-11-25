@@ -144,18 +144,40 @@ export class MachineService {
   }
 
   async getMedicineRemainByMachine(machine_id: string) {
+    // 기기 정보와 그룹 ID를 함께 조회
+    const machine = await this.machineRepository.findOne({
+      where: { machine_id },
+    });
+
+    if (!machine) {
+      throw new NotFoundException(`Machine with ID ${machine_id} not found`);
+    }
+    const group_id = machine.group_id;
+
     // 기기의 슬롯 정보 조회
     const machineSlots = await this.machineSlotRepository.find({
       where: { machine_id },
-      order: { slot_number: 'ASC' }
+      order: { slot_number: 'ASC' },
     });
 
     const medicineIds = machineSlots
       .map((slot) => slot.medi_id)
       .filter((id): id is string => id !== null && !id.startsWith('TEMP_'));
-    
+
+    if (medicineIds.length === 0) {
+      // 조회할 약이 없으면 바로 반환
+      return machineSlots.map((slot) => ({
+        slot_number: slot.slot_number,
+        medi_id: slot.medi_id,
+        name: '(약 미등록)',
+        total: slot.total,
+        remain: slot.remain,
+      }));
+    }
+       
     const medicines = await this.medicineRepository.findBy({
       medi_id: In(medicineIds),
+      group_id: group_id, // ★★★ group_id 조건 추가
     });
 
     const medicineMap = new Map(medicines.map((m) => [m.medi_id, m]));
