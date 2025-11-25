@@ -218,13 +218,14 @@ export class DoseHistoryController {
   @Get('machine/:machine_id')
   async getDoseHistoryForMachine(
     @Param('machine_id') machine_id: string,
-    @Query('limit') limit: string,
+    @Query('start_date') start_date: string, // ★★★ start_date로 변경
   ) {
     try {
-      const limitValue = limit ? parseInt(limit, 10) : 5;
+      // start_date가 없으면 기본값으로 어제 날짜 설정
+      const startDateValue = start_date || new Date(Date.now() - 86400000).toISOString().split('T')[0];
       const result = await this.doseHistoryService.getDoseHistoryByMachineId(
         machine_id,
-        limitValue,
+        startDateValue,
       );
        
       return {

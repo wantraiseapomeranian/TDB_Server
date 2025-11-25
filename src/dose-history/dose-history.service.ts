@@ -530,12 +530,12 @@ export class DoseHistoryService {
   // ===================================================================
   //  TDB-Client GUI 연동 API
   // ===================================================================
-  async getDoseHistoryByMachineId(machine_id: string, limit: number) {
+  async getDoseHistoryByMachineId(machine_id: string, start_date: string) {
     const histories = await this.doseHistoryRepository.createQueryBuilder('history')
       .leftJoinAndSelect('history.user', 'user')
       .where('history.group_id IN (SELECT group_id FROM machine WHERE machine_id = :machine_id)', { machine_id })
+      .andWhere('history.completed_at >= :start_date', { start_date }) // ★★★ 날짜 기준으로 필터링
       .orderBy('history.completed_at', 'DESC')
-      .take(limit)
       .getMany();
 
     return histories.map(h => ({
