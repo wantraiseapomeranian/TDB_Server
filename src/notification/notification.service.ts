@@ -56,7 +56,7 @@ export class NotificationService {
         data: notification,
       };
     } catch (error) {
-      this.logger.error(`❌ 알림 생성 실패:`, error);
+      //this.logger.error(`❌ 알림 생성 실패:`, error);
       return {
         success: false,
         error: error.message,
