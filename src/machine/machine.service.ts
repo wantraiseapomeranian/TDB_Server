@@ -622,6 +622,7 @@ export class MachineService {
       time_of_day: s.time_of_day,
       user_name: s.user.name,
       medicine_name: s.medicine.name,
+      dose: s.dose, 
     }));
   }
 
