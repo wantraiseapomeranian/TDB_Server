@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { JsonWebTokenError, JwtService, TokenExpiredError } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '../users/entities/users.entity';
 import { UserRole } from '../users/entities/user-role.enum';
@@ -48,6 +48,7 @@ export class AuthService {
     @InjectRepository(UserGroupMembership)
     private readonly membershipRepository: Repository<UserGroupMembership>,
     private readonly jwtService: JwtService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async signup(params: SignupParams) {
@@ -71,8 +72,12 @@ export class AuthService {
       `회원가입 요청 처리 중 - ID: ${id}, Role: ${role || accountType}`,
     );
 
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      const existingUser = await this.userRepository.findOne({
+      const existingUser = await queryRunner.manager.findOne(User, {
         where: { user_id: id },
       });
 
@@ -97,7 +102,7 @@ export class AuthService {
       }
 
       // 사용자 엔터티 생성
-      const user = this.userRepository.create({
+      const user = queryRunner.manager.create(User, {
         user_id: id,
         password: hashedPassword,
         name,
@@ -108,7 +113,7 @@ export class AuthService {
 
       this.logger.debug(`[signup] 저장될 사용자 객체: ${JSON.stringify(user)}`);
 
-      const savedUser = await this.userRepository.save(user);
+      const savedUser = await queryRunner.manager.save(User, user);
 
       if (!savedUser || !savedUser.user_id) {
         this.logger.error(
@@ -126,14 +131,14 @@ export class AuthService {
         // 부모 사용자인 경우 새 그룹 생성
         groupId = uuidv4();
         const finalGroupName = groupName || `${name}님의 가족`; // 🔥 사용자 입력 그룹명 우선 사용
-        group = this.userGroupRepository.create({
+        group = queryRunner.manager.create(UserGroup, {
           group_id: groupId,
           group_name: finalGroupName,
           parent_user_id: savedUser.user_id,
           note: 'Auto-created family group',
         });
         
-        await this.userGroupRepository.save(group);
+        await queryRunner.manager.save(UserGroup, group);
         this.logger.debug(`[signup] 새 그룹 생성 완료 - group_id: ${groupId}, group_name: ${finalGroupName}`);
       } else {
         // 자녀 사용자인 경우 기존 그룹에 참여
@@ -144,7 +149,7 @@ export class AuthService {
           this.logger.debug(`[signup] parentUuid로 부모 그룹 찾기: ${parentUuid}`);
           
           // 부모의 멤버십 정보를 통해 group_id 찾기
-          const parentMembership = await this.membershipRepository.findOne({
+          const parentMembership = await queryRunner.manager.findOne(UserGroupMembership, {
             where: { user_id: parentUuid },
           });
 
@@ -162,7 +167,7 @@ export class AuthService {
           throw new ConflictException('서브 계정은 부모 그룹 ID 또는 부모 계정 ID가 필요합니다.');
         }
 
-        group = await this.userGroupRepository.findOne({
+        group = await queryRunner.manager.findOne(UserGroup, {
           where: { group_id: targetGroupId },
         });
 
@@ -180,13 +185,13 @@ export class AuthService {
       }
 
       // 멤버십 생성
-      const membership = this.membershipRepository.create({
+      const membership = queryRunner.manager.create(UserGroupMembership, {
         group_id: groupId,
         user_id: savedUser.user_id,
         role: userRole,
       });
 
-      await this.membershipRepository.save(membership);
+      await queryRunner.manager.save(UserGroupMembership, membership);
 
       this.logger.log(
         `[signup] 회원가입 완료 - ID: ${savedUser.user_id}, Role: ${userRole}, Group: ${groupId}`,
@@ -197,9 +202,11 @@ export class AuthService {
       const refreshToken = this.signToken(savedUser, userRole, groupId, 'refresh');
 
       // refresh token을 데이터베이스에 저장
-      await this.userRepository.update(savedUser.user_id, {
+      await queryRunner.manager.update(User, savedUser.user_id, {
         refresh_token: refreshToken,
       });
+
+      await queryRunner.commitTransaction();
 
       this.logger.log(`[signup] 토큰 생성 및 저장 완료 - ID: ${savedUser.user_id}`);
 
@@ -218,14 +225,17 @@ export class AuthService {
         },
       };
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
       this.logger.error(
-        `[signup] 회원가입 중 오류 발생: ${errorMessage}`,
+        `[signup] 회원가입 중 오류 발생 (롤백됨): ${errorMessage}`,
         errorStack,
       );
       throw error;
+    } finally {
+      await queryRunner.release();
     }
   }
 
