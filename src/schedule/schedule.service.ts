@@ -684,4 +684,58 @@ export class ScheduleService {
       };
     }
   }
+
+  /**
+   * 🔥 스케줄 삭제 (새로 추가)
+   */
+  async deleteSchedule(mediId: string, userId: string) {
+    try {
+      console.log(`🔥 [ScheduleService] 스케줄 삭제: mediId=${mediId}, userId=${userId}`);
+
+      // 1. 사용자 그룹 정보 조회
+      const { user, group } = await this.getUserGroup(userId);
+
+      // 2. 스케줄 조회
+      const schedules = await this.scheduleRepo.find({
+        where: {
+          medi_id: mediId,
+          user_id: userId,
+          group_id: group.group_id
+        }
+      });
+
+      if (schedules.length === 0) {
+        console.log(`⚠️ [ScheduleService] 삭제할 스케줄이 없습니다: mediId=${mediId}, userId=${userId}`);
+        return {
+          success: true,
+          message: '삭제할 스케줄이 없습니다.',
+          data: { deleted_count: 0 }
+        };
+      }
+
+      // 3. 스케줄 삭제
+      const result = await this.scheduleRepo.delete({
+        medi_id: mediId,
+        user_id: userId,
+        group_id: group.group_id
+      });
+
+      console.log(`✅ [ScheduleService] 스케줄 삭제 완료: ${result.affected}개 삭제됨`);
+
+      return {
+        success: true,
+        message: '스케줄이 삭제되었습니다.',
+        data: { deleted_count: result.affected || 0 }
+      };
+
+    } catch (error) {
+      console.error(`🚨 [ScheduleService] 스케줄 삭제 에러:`, error);
+      return {
+        success: false,
+        error: {
+          message: error.message || '스케줄 삭제 중 오류가 발생했습니다.'
+        }
+      };
+    }
+  }
 } 

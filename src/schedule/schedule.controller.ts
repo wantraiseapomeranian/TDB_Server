@@ -6,10 +6,12 @@ import {
   Param,
   Query,
   UseGuards,
+  Delete, // 🔥 Delete 추가
 } from '@nestjs/common';
 import { ScheduleService } from './schedule.service';
 import { AccessTokenGuard } from '../auth/guard/bearer-token.guard';
 import { AgeValidationService } from '../validation/age-validation.service';
+import { CreateMedicineScheduleDto } from './dto/create-schedule.dto'; // 🔥 DTO 추가
 
 // 🔥 프로덕션용 인증 가드 활성화
 @UseGuards(AccessTokenGuard)
@@ -142,8 +144,8 @@ export class ScheduleController {
       request_user_id?: string;  // 🔥 요청자 정보 추가
     },
   ) {
-    console.log(`🔥 [V3 Controller] 매트릭스 스케줄 저장: ${medicineId}/${memberId}`);
-    console.log(`🔥 [V3 Controller] Body:`, JSON.stringify(body, null, 2));
+    console.log(` [V3 Controller] 매트릭스 스케줄 저장: ${medicineId}/${memberId}`);
+    console.log(` [V3 Controller] Body:`, JSON.stringify(body, null, 2));
     
     if (body.version === 'v3' && body.matrix_enabled) {
       return this.scheduleService.saveMatrixSchedule(
@@ -164,20 +166,10 @@ export class ScheduleController {
   @Post('medicine/:medicineId')
   async saveMedicineSchedule(
     @Param('medicineId') medicineId: string,
-    @Body() body: {
-      memberId: string;
-      schedule: any;
-      totalQuantity?: string;
-      doseCount?: string;
-      requestUserId?: string;
-      morningDose?: number;
-      afternoonDose?: number;
-      eveningDose?: number;
-    },
+    @Body() body: CreateMedicineScheduleDto, 
   ) {
     console.log('Controller에서 받은 body 전체:', JSON.stringify(body, null, 2));
     console.log('medicineId:', medicineId);
-    console.log('requestUserId:', body.requestUserId);
     
     // 🔥 시간대별 복용량 처리
     console.log(`[Controller] 🔍 받은 시간대별 복용량:`, {
@@ -468,12 +460,7 @@ export class ScheduleController {
   @Post('supplement/:supplementId')
   async saveSupplementSchedule(
     @Param('supplementId') supplementId: string,
-    @Body() body: {
-      memberId: string;
-      schedule: any;
-      totalQuantity?: string;
-      doseCount?: string;
-    },
+    @Body() body: CreateMedicineScheduleDto, // 🔥 DTO 재사용
   ) {
     return this.scheduleService.saveSchedule(
       supplementId,
@@ -493,5 +480,29 @@ export class ScheduleController {
     @Query('memberId') memberId: string,
   ) {
     return this.scheduleService.getSchedule(supplementId, memberId);
+  }
+
+  /**
+   * 8. 영양제 스케줄 삭제 (🔥 새로 추가)
+   */
+  @Delete('supplement/:supplementId/:memberId')
+  async deleteSupplementSchedule(
+    @Param('supplementId') supplementId: string,
+    @Param('memberId') memberId: string,
+  ) {
+    console.log(`🔥 [Controller] 영양제 스케줄 삭제: supplementId=${supplementId}, memberId=${memberId}`);
+    return this.scheduleService.deleteSchedule(supplementId, memberId);
+  }
+
+  /**
+   * 9. 약물 스케줄 삭제 (🔥 추가 - 호환성)
+   */
+  @Delete('medicine/:medicineId/:memberId')
+  async deleteMedicineSchedule(
+    @Param('medicineId') medicineId: string,
+    @Param('memberId') memberId: string,
+  ) {
+    console.log(`🔥 [Controller] 약물 스케줄 삭제: medicineId=${medicineId}, memberId=${memberId}`);
+    return this.scheduleService.deleteSchedule(medicineId, memberId);
   }
 }

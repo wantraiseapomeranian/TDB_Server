@@ -222,7 +222,7 @@ export class AuthService {
         data: {
           accessToken,
           refreshToken,
-          id: savedUser.user_id,
+          user_id: savedUser.user_id,  // 🔥 id → user_id로 통일
           name: savedUser.name,
           role: userRole,
           groupId: groupId,
@@ -287,7 +287,7 @@ export class AuthService {
       data: {
         accessToken,
         refreshToken,
-        id: user.user_id,
+        user_id: user.user_id,  // 🔥 id → user_id로 통일
         name: user.name,
         role: membership.role,
         groupId: membership.group_id,
