@@ -81,10 +81,14 @@ export class AuthService {
         where: { user_id: id },
       });
 
+      this.logger.debug(`[signup] 중복 체크 결과 - ID: ${id}, 존재여부: ${!!existingUser}`);
+
       if (existingUser) {
-        this.logger.warn(`[signup] 중복된 ID 사용 시도: ${id}`);
+        this.logger.warn(`[signup] ❌ 중복된 ID 사용 시도: ${id}`);
         throw new ConflictException('이미 등록된 사용자입니다.');
       }
+
+      this.logger.debug(`[signup] ✅ ID 사용 가능: ${id}`);
 
       const hashedPassword = await bcrypt.hash(
         password,

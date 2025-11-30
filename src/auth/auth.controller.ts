@@ -144,7 +144,14 @@ export class AuthController {
   })
   async register(@Body() signupDto: SignupDto) {
     this.logger.log(`register 요청 - ID: ${signupDto.id}`);
-    return this.authService.signup(signupDto);
+    try {
+      const result = await this.authService.signup(signupDto);
+      this.logger.log(`register 성공 - ID: ${signupDto.id}`);
+      return result;
+    } catch (error) {
+      this.logger.error(`register 실패 - ID: ${signupDto.id}`, error);
+      throw error;
+    }
   }
 
   @Post('signup') // 프론트엔드 호환성을 위해 추가
@@ -154,7 +161,14 @@ export class AuthController {
   })
   async signup(@Body() signupDto: SignupDto) {
     this.logger.log(`signup 요청 - ID: ${signupDto.id}`);
-    return this.authService.signup(signupDto);
+    try {
+      const result = await this.authService.signup(signupDto);
+      this.logger.log(`signup 성공 - ID: ${signupDto.id}`);
+      return result;
+    } catch (error) {
+      this.logger.error(`signup 실패 - ID: ${signupDto.id}, Error:`, error);
+      throw error;
+    }
   }
 
   /**
