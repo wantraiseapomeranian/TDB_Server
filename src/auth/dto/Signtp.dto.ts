@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsNumber,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class SignupDto {
   @IsString() id: string;
@@ -17,6 +18,9 @@ export class SignupDto {
   @IsEnum(['parent', 'child'])
   role?: 'parent' | 'child';
   @IsOptional() @IsString() uuid?: string;
-  @IsOptional() @IsString() parentUuid?: string;
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  parentUuid?: string;
   @IsOptional() @IsString() groupName?: string;
 }
