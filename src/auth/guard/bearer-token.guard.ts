@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { AuthService } from '../auth.service';
+import { AuthService, TokenPayload } from '../auth.service';
 import { UsersService } from '../../users/users.service';
 import { User } from '../../users/entities/users.entity';
 
@@ -13,6 +13,7 @@ interface AuthenticatedRequest extends Request {
   user: User;
   token: string;
   tokenType: 'access' | 'refresh' | 'device';
+  tokenPayload?: TokenPayload; // 🔥 TokenPayload 추가
 }
 
 @Injectable()
@@ -41,6 +42,7 @@ export class BearerTokenGuard implements CanActivate {
     req.user = user;
     req.token = token;
     req.tokenType = decoded.type ?? 'access'; // type이 명시되지 않은 경우 기본값 access
+    req.tokenPayload = decoded; // 🔥 TokenPayload 저장
 
     return true;
   }

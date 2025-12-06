@@ -70,7 +70,14 @@ export class DoseHistoryService {
         .getOne();
 
       if (doseHistory) {
-        // 기존 기록 업데이트
+        // 🔥 기존 기록이 있고, 아두이노 배출로 생성된 기록이면 업데이트하지 않음
+        const isMachineDispense = doseHistory.notes && doseHistory.notes.includes('Machine:');
+        if (isMachineDispense) {
+          // 아두이노 배출 기록이 이미 있으면 그대로 반환 (업데이트 안 함)
+          return doseHistory;
+        }
+        
+        // 기존 기록 업데이트 (수동 체크 또는 다른 방식으로 생성된 기록인 경우)
         doseHistory.actual_dose = actual_dose;
         doseHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
         doseHistory.completed_at = new Date();

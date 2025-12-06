@@ -117,23 +117,56 @@ export class DispenseService {
         }
       }
 
-      const doseQuantity = report.items.reduce((sum, item) => sum + item.count, 0);
-      const actualDose = (report.result === 'completed' || report.result === 'partial') ? doseQuantity : 0;
+      // 🔥 각 약물에 대해 복용 기록 처리 (중복 체크 포함)
+      const todayString = new Date().toISOString().split('T')[0];
+      
+      for (const item of report.items) {
+        // 🔥 각 약물별 actualDose 계산 (전체 합계가 아닌 개별 약물의 count 사용)
+        const itemActualDose = (report.result === 'completed' || report.result === 'partial') ? item.count : 0;
+        
+        // 🔥 기존 기록이 있는지 확인 (중복 방지)
+        const existingHistory = await transactionalEntityManager
+          .createQueryBuilder(DoseHistory, 'dh')
+          .where('dh.user_id = :user_id', { user_id: report.user_id })
+          .andWhere('dh.medi_id = :medi_id', { medi_id: item.medi_id })
+          .andWhere('dh.time_of_day = :time_of_day', { time_of_day: report.time })
+          .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
+          .getOne();
 
-      const historyEntry = this.doseHistoryRepository.create({
-          group_id: membership.group_id,
-          user_id: report.user_id,
-          medi_id: report.items.length > 0 ? report.items[0].medi_id : null,
-          time_of_day: report.time,
-          dose_date: new Date(),
-          scheduled_dose: doseQuantity,
-          actual_dose: actualDose,
-          status: report.result as DoseStatus,
-          completed_at: new Date(),
-          notes: `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`
-      });
-      await transactionalEntityManager.save(DoseHistory, historyEntry);
-      this.logger.log(`복용 기록 저장 완료: user ${report.user_id}`);
+        if (existingHistory) {
+          // 기존 기록이 있으면 업데이트 (수동 체크로 덮어쓰기 방지)
+          this.logger.log(
+            `기존 복용 기록 발견, 업데이트: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`
+          );
+          existingHistory.actual_dose = itemActualDose; // 🔥 각 약물별 count 사용
+          existingHistory.status = report.result as DoseStatus;
+          existingHistory.completed_at = new Date();
+          // 기존 notes에 배출 정보 추가
+          const existingNotes = existingHistory.notes || '';
+          existingHistory.notes = existingNotes 
+            ? `${existingNotes} | Machine: ${report.machine_id}` 
+            : `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`;
+          await transactionalEntityManager.save(DoseHistory, existingHistory);
+        } else {
+          // 새 기록 생성
+          const historyEntry = transactionalEntityManager.create(DoseHistory, {
+            group_id: membership.group_id,
+            user_id: report.user_id,
+            medi_id: item.medi_id,
+            time_of_day: report.time,
+            dose_date: new Date(todayString),
+            scheduled_dose: item.count,
+            actual_dose: itemActualDose, // 🔥 각 약물별 count 사용
+            status: report.result as DoseStatus,
+            completed_at: new Date(),
+            notes: `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`
+          });
+          await transactionalEntityManager.save(DoseHistory, historyEntry);
+          this.logger.log(`복용 기록 생성 완료: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`);
+        }
+      }
+      
+      this.logger.log(`복용 기록 처리 완료: user ${report.user_id}, items=${report.items.length}개`);
 
       let tookToday = user.took_today;
       if (report.result === 'completed') {

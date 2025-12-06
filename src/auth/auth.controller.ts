@@ -51,6 +51,7 @@ interface BasicAuthRequest extends Request {
 
 interface TokenAuthRequest extends Request {
   user?: TokenPayload;
+  tokenPayload?: TokenPayload; // 🔥 BearerTokenGuard에서 설정한 TokenPayload
 }
 
 interface RefreshTokenRequest extends Request {
@@ -203,15 +204,16 @@ export class AuthController {
   @Get('verify')
   @UseGuards(AccessTokenGuard)
   async verify(@Req() req: TokenAuthRequest) {
-    const user = req.user;
+    // 🔥 BearerTokenGuard에서 설정한 tokenPayload 사용
+    const tokenPayload = req.tokenPayload || req.user;
 
-    if (!user) {
+    if (!tokenPayload || !tokenPayload.sub) {
       this.logger.error('인증된 사용자 정보가 없습니다.');
       throw new UnauthorizedException('인증된 사용자 정보가 없습니다.');
     }
 
-    this.logger.log(`verify 요청 (프론트엔드 호환) - user: ${user.sub}`);
-    return this.authService.checkAuth(user);
+    this.logger.log(`verify 요청 (프론트엔드 호환) - user: ${tokenPayload.sub}`);
+    return this.authService.checkAuth(tokenPayload);
   }
 
   /**

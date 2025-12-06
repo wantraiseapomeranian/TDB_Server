@@ -164,21 +164,44 @@ export class DispenserService {
             slot.remain -= schedule.dose;
             await this.machineSlotRepository.save(slot);
 
-            // 복용 기록 저장
-            const doseHistory = this.doseHistoryRepository.create({
-              group_id: machine.group_id,
-              user_id: user.user_id,
-              medi_id: schedule.medi_id,
-              time_of_day: currentTimeOfDay,
-              dose_date: new Date(todayStr),
-              scheduled_dose: schedule.dose,
-              actual_dose: schedule.dose,
-              status: DoseStatus.COMPLETED,
-              completed_at: new Date(),
-              notes: `RFID 자동배출 (${k_uid})`,
-            });
+            // 🔥 기존 복용 기록 확인 (중복 방지)
+            const existingHistory = await this.doseHistoryRepository
+              .createQueryBuilder('dh')
+              .where('dh.user_id = :user_id', { user_id: user.user_id })
+              .andWhere('dh.medi_id = :medi_id', { medi_id: schedule.medi_id })
+              .andWhere('dh.time_of_day = :time_of_day', { time_of_day: currentTimeOfDay })
+              .andWhere('DATE(dh.dose_date) = :today', { today: todayStr })
+              .getOne();
 
-            await this.doseHistoryRepository.save(doseHistory);
+            if (existingHistory) {
+              // 기존 기록이 있으면 업데이트
+              existingHistory.actual_dose = schedule.dose;
+              existingHistory.status = DoseStatus.COMPLETED;
+              existingHistory.completed_at = new Date();
+              // 기존 notes에 RFID 배출 정보 추가
+              const existingNotes = existingHistory.notes || '';
+              existingHistory.notes = existingNotes 
+                ? `${existingNotes} | RFID 자동배출 (${k_uid})` 
+                : `RFID 자동배출 (${k_uid})`;
+              await this.doseHistoryRepository.save(existingHistory);
+              console.log(`✅ 기존 복용 기록 업데이트: ${schedule.medicine?.name}`);
+            } else {
+              // 새 기록 생성
+              const doseHistory = this.doseHistoryRepository.create({
+                group_id: machine.group_id,
+                user_id: user.user_id,
+                medi_id: schedule.medi_id,
+                time_of_day: currentTimeOfDay,
+                dose_date: new Date(todayStr),
+                scheduled_dose: schedule.dose,
+                actual_dose: schedule.dose,
+                status: DoseStatus.COMPLETED,
+                completed_at: new Date(),
+                notes: `RFID 자동배출 (${k_uid})`,
+              });
+              await this.doseHistoryRepository.save(doseHistory);
+              console.log(`✅ 새 복용 기록 생성: ${schedule.medicine?.name}`);
+            }
 
             dispensedMedicines.push({
               medicine_name: schedule.medicine?.name || schedule.medi_id,
@@ -273,21 +296,47 @@ export class DispenserService {
         slot.remain -= data.quantity;
         await this.machineSlotRepository.save(slot);
 
-        // 복용 기록 저장
-        const doseHistory = this.doseHistoryRepository.create({
-          group_id: machine.group_id,
-          user_id: data.userId,
-          medi_id: data.medicineId,
-          time_of_day: this.getCurrentTimeOfDay(),
-          dose_date: new Date(),
-          scheduled_dose: data.quantity,
-          actual_dose: data.quantity,
-          status: DoseStatus.COMPLETED,
-          completed_at: new Date(),
-          notes: `스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`,
-        });
+        // 🔥 기존 복용 기록 확인 (중복 방지)
+        const todayString = new Date().toISOString().split('T')[0];
+        const currentTimeOfDay = this.getCurrentTimeOfDay();
+        
+        const existingHistory = await this.doseHistoryRepository
+          .createQueryBuilder('dh')
+          .where('dh.user_id = :user_id', { user_id: data.userId })
+          .andWhere('dh.medi_id = :medi_id', { medi_id: data.medicineId })
+          .andWhere('dh.time_of_day = :time_of_day', { time_of_day: currentTimeOfDay })
+          .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
+          .getOne();
 
-        await this.doseHistoryRepository.save(doseHistory);
+        if (existingHistory) {
+          // 기존 기록이 있으면 업데이트
+          existingHistory.actual_dose = data.quantity;
+          existingHistory.status = DoseStatus.COMPLETED;
+          existingHistory.completed_at = new Date();
+          // 기존 notes에 스케줄 배출 정보 추가
+          const existingNotes = existingHistory.notes || '';
+          existingHistory.notes = existingNotes 
+            ? `${existingNotes} | 스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}` 
+            : `스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`;
+          await this.doseHistoryRepository.save(existingHistory);
+          console.log(`✅ 기존 복용 기록 업데이트: ${data.medicineId}`);
+        } else {
+          // 새 기록 생성
+          const doseHistory = this.doseHistoryRepository.create({
+            group_id: machine.group_id,
+            user_id: data.userId,
+            medi_id: data.medicineId,
+            time_of_day: currentTimeOfDay,
+            dose_date: new Date(todayString),
+            scheduled_dose: data.quantity,
+            actual_dose: data.quantity,
+            status: DoseStatus.COMPLETED,
+            completed_at: new Date(),
+            notes: `스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`,
+          });
+          await this.doseHistoryRepository.save(doseHistory);
+          console.log(`✅ 새 복용 기록 생성: ${data.medicineId}`);
+        }
 
         console.log(`🔥 [DispenserService] 스케줄 기반 자동배출 완료: ${data.quantity}개 배출`);
 
