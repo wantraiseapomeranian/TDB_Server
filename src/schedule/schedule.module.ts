@@ -14,8 +14,8 @@ import { UsersModule } from '../users/users.module';
 import { AccessTokenGuard } from 'src/auth/guard/bearer-token.guard';
 import { Machine } from 'src/machine/entities/machine.entity';
 import { MachineSlot } from 'src/machine/entities/machine-slot.entity';
-import { DoseHistoryModule } from '../dose-history/dose-history.module';
 import { ValidationModule } from '../validation/validation.module';
+import { DoseHistoryModule } from '@/dose-history/dose-history.module';
 
 @Module({
   imports: [
