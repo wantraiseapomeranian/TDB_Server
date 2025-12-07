@@ -35,6 +35,9 @@ export class MedicineMaster {
   @Column({ type: 'text', nullable: true, comment: '섭취시 주의사항' })
   precautions: string;
 
+  @Column({ type: 'text', nullable: true, comment: '부작용 (SEQESITM)' })
+  side_effects: string;
+
   @Column({ type: 'text', nullable: true, comment: '보관방법' })
   storage_method: string;
 
