@@ -28,7 +28,7 @@ export class MedicineController {
    */
   @Get('list/:userId')
   async getMedicineListByUser(@Param('userId') userId: string) {
-    console.log(`🔥 [MedicineController] 사용자별 약물 목록 조회: userId=${userId}`);
+    // console.log(`🔥 [MedicineController] 사용자별 약물 목록 조회: userId=${userId}`);
     return this.medicineService.getMedicineList(userId);
   }
 
@@ -40,7 +40,7 @@ export class MedicineController {
     if (!connect) {
       throw new BadRequestException('connect 파라미터가 필요합니다.');
     }
-    console.log(`🔥 [MedicineController] 약물 목록 조회: connect=${connect}`);
+    // console.log(`🔥 [MedicineController] 약물 목록 조회: connect=${connect}`);
     return this.medicineService.getMedicineList(connect);
   }
 
@@ -62,7 +62,7 @@ export class MedicineController {
       throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
     }
 
-    console.log(`🔥 [MedicineController] 약물 검색: query="${query}", userId=${searchUserId}`);
+    // console.log(`🔥 [MedicineController] 약물 검색: query="${query}", userId=${searchUserId}`);
     return this.medicineService.searchMedicine(searchUserId, query);
   }
 
@@ -74,7 +74,7 @@ export class MedicineController {
     if (!connect) {
       throw new BadRequestException('connect 파라미터가 필요합니다.');
     }
-    console.log(`🔥 [MedicineController] 약물 재고 조회: connect=${connect}`);
+    // console.log(`🔥 [MedicineController] 약물 재고 조회: connect=${connect}`);
     return this.medicineService.getMedicineInventory(connect);
   }
 
@@ -86,7 +86,7 @@ export class MedicineController {
     @Param('medicineId') medicineId: string,
     @Query('memberId') memberId: string,
   ) {
-    console.log(`🔥 [MedicineController] 약물 스케줄 조회: medicineId=${medicineId}, memberId=${memberId}`);
+    // console.log(`🔥 [MedicineController] 약물 스케줄 조회: medicineId=${medicineId}, memberId=${memberId}`);
     
     if (!memberId) {
       throw new BadRequestException('사용자 ID(memberId)가 필요합니다.');
@@ -99,11 +99,11 @@ export class MedicineController {
       const schedules = result.data.schedules;
       const slotInfo = result.data.slotInfo;
       
-      console.log(`[MedicineController] 조회된 스케줄 개수: ${schedules.length}`);
+      // console.log(`[MedicineController] 조회된 스케줄 개수: ${schedules.length}`);
       
       // 빈 배열인 경우 기본값으로 응답
       if (schedules.length === 0) {
-        console.log(`[MedicineController] 스케줄이 없어서 기본값 반환`);
+        // console.log(`[MedicineController] 스케줄이 없어서 기본값 반환`);
         
         return {
           data: {
@@ -215,7 +215,7 @@ export class MedicineController {
       throw new BadRequestException('사용자 ID(userId 또는 connect)가 필요합니다.');
     }
 
-    console.log(`🔥 [MedicineController] 약물 상세 조회: mediId=${mediId}, userId=${searchUserId}`);
+    // console.log(`🔥 [MedicineController] 약물 상세 조회: mediId=${mediId}, userId=${searchUserId}`);
     return this.medicineService.getMedicineDetail(searchUserId, mediId);
   }
 
@@ -257,7 +257,7 @@ export class MedicineController {
       total: total,
     };
 
-    console.log(`🔥 [MedicineController] 약물 등록 (add):`, { userId, medicineData });
+    // console.log(`🔥 [MedicineController] 약물 등록 (add):`, { userId, medicineData });
     return this.medicineService.saveMedicine(userId, medicineData);
   }
 
@@ -299,7 +299,7 @@ export class MedicineController {
       total: total,
     };
 
-    console.log(`🔥 [MedicineController] 약물 등록:`, { userId, medicineData });
+    // console.log(`🔥 [MedicineController] 약물 등록:`, { userId, medicineData });
     return this.medicineService.saveMedicine(userId, medicineData);
   }
 
@@ -337,7 +337,7 @@ export class MedicineController {
       total: total,
     };
 
-    console.log(`🔥 [MedicineController] 약물 수정:`, { mediId, userId, updateData });
+    // console.log(`🔥 [MedicineController] 약물 수정:`, { mediId, userId, updateData });
     return this.medicineService.updateMedicine(userId, mediId, updateData);
   }
 
@@ -349,7 +349,7 @@ export class MedicineController {
     @Param('connect') connect: string,
     @Param('mediId') mediId: string,
   ) {
-    console.log(`🔥 [MedicineController] 약물 삭제: connect=${connect}, mediId=${mediId}`);
+    // console.log(`🔥 [MedicineController] 약물 삭제: connect=${connect}, mediId=${mediId}`);
     return this.medicineService.deleteMedicine(connect, mediId);
   }
 
@@ -381,7 +381,7 @@ export class MedicineController {
 
     const updateData = { total };
 
-    console.log(`🔥 [MedicineController] 약물 수량 업데이트:`, { mediId, userId, total });
+    // console.log(`🔥 [MedicineController] 약물 수량 업데이트:`, { mediId, userId, total });
     return this.medicineService.updateMedicine(userId, mediId, updateData);
   }
 
@@ -390,7 +390,7 @@ export class MedicineController {
    */
   @Get('user/:userId')
   async getMedicineListCompatibility(@Param('userId') userId: string) {
-    console.log(`🔥 [MedicineController] 호환성 - 사용자별 약물 목록 조회: userId=${userId}`);
+    // console.log(`🔥 [MedicineController] 호환성 - 사용자별 약물 목록 조회: userId=${userId}`);
     return this.medicineService.getMedicineList(userId);
   }
 
@@ -430,7 +430,7 @@ export class MedicineController {
       total: total,
     };
 
-    console.log(`🔥 [MedicineController] 호환성 - 약물 수정:`, { mediId: body.mediId, userId, updateData });
+    // console.log(`🔥 [MedicineController] 호환성 - 약물 수정:`, { mediId: body.mediId, userId, updateData });
     return this.medicineService.updateMedicine(userId, body.mediId, updateData);
   }
 
@@ -448,7 +448,7 @@ export class MedicineController {
       throw new BadRequestException('connect와 mediId가 필요합니다.');
     }
     
-    console.log(`🔥 [MedicineController] 호환성 - 약물 삭제:`, body);
+    // console.log(`🔥 [MedicineController] 호환성 - 약물 삭제:`, body);
     return this.medicineService.deleteMedicine(body.connect, body.mediId);
   }
 

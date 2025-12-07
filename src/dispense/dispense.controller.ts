@@ -14,7 +14,7 @@ export class DispenseController {
   @ApiOperation({ summary: '배출 결과 보고 (신규)' })
   @ApiBearerAuth()
   async reportDispense(@Body(ValidationPipe) body: DispenseReportDto) {
-    this.logger.log(`[Device API] Dispense Report 수신: user ${body.user_id}, time ${body.time}, result ${body.result}`);
+    // this.logger.log(`[Device API] Dispense Report 수신: user ${body.user_id}, time ${body.time}, result ${body.result}`);
     return this.dispenseService.reportDispense(body);
   }
 }

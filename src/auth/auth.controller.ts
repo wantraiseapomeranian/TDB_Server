@@ -90,7 +90,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: '기기 로그인 성공, 토큰 발급' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   async loginDevice(@Body(ValidationPipe) body: DeviceLoginDto) {
-    this.logger.log(`[Device] 로그인 요청: ${body.machineId}`);
+    // this.logger.log(`[Device] 로그인 요청: ${body.machineId}`);
     return this.authService.loginDevice(body);
   }
 
@@ -144,13 +144,13 @@ export class AuthController {
     description: '새 사용자 계정을 생성합니다.',
   })
   async register(@Body() signupDto: SignupDto) {
-    this.logger.log(`register 요청 - ID: ${signupDto.id}`);
+    // this.logger.log(`register 요청 - ID: ${signupDto.id}`);
     try {
       const result = await this.authService.signup(signupDto);
-      this.logger.log(`register 성공 - ID: ${signupDto.id}`);
+      // this.logger.log(`register 성공 - ID: ${signupDto.id}`);
       return result;
     } catch (error) {
-      this.logger.error(`register 실패 - ID: ${signupDto.id}`, error);
+      // this.logger.error(`register 실패 - ID: ${signupDto.id}`, error);
       throw error;
     }
   }
@@ -161,13 +161,13 @@ export class AuthController {
     description: '새 사용자 계정을 생성합니다. (프론트엔드 API 호환성)',
   })
   async signup(@Body() signupDto: SignupDto) {
-    this.logger.log(`signup 요청 - ID: ${signupDto.id}`);
+    // this.logger.log(`signup 요청 - ID: ${signupDto.id}`);
     try {
       const result = await this.authService.signup(signupDto);
-      this.logger.log(`signup 성공 - ID: ${signupDto.id}`);
+      // this.logger.log(`signup 성공 - ID: ${signupDto.id}`);
       return result;
     } catch (error) {
-      this.logger.error(`signup 실패 - ID: ${signupDto.id}, Error:`, error);
+      // this.logger.error(`signup 실패 - ID: ${signupDto.id}, Error:`, error);
       throw error;
     }
   }
@@ -177,7 +177,7 @@ export class AuthController {
    */
   @Post('logout')
   async logout(@Body('id') id: string) {
-    this.logger.log(`로그아웃 요청 - ID: ${id}`);
+    // this.logger.log(`로그아웃 요청 - ID: ${id}`);
     return this.authService.logout(id);
   }
 
@@ -190,11 +190,11 @@ export class AuthController {
     const user = req.user;
 
     if (!user) {
-      this.logger.error('인증된 사용자 정보가 없습니다.');
+      // this.logger.error('인증된 사용자 정보가 없습니다.');
       throw new UnauthorizedException('인증된 사용자 정보가 없습니다.');
     }
 
-    this.logger.log(`check-auth 요청 - user: ${user.sub}`);
+    // this.logger.log(`check-auth 요청 - user: ${user.sub}`);
     return this.authService.checkAuth(user);
   }
 
@@ -208,11 +208,11 @@ export class AuthController {
     const tokenPayload = req.tokenPayload || req.user;
 
     if (!tokenPayload || !tokenPayload.sub) {
-      this.logger.error('인증된 사용자 정보가 없습니다.');
+      // this.logger.error('인증된 사용자 정보가 없습니다.');
       throw new UnauthorizedException('인증된 사용자 정보가 없습니다.');
     }
 
-    this.logger.log(`verify 요청 (프론트엔드 호환) - user: ${tokenPayload.sub}`);
+    // this.logger.log(`verify 요청 (프론트엔드 호환) - user: ${tokenPayload.sub}`);
     return this.authService.checkAuth(tokenPayload);
   }
 
@@ -225,7 +225,7 @@ export class AuthController {
     const user = req.user;
 
     if (!user || !user.user_id || !user.role || !user.groupId) {
-      this.logger.error('토큰 재발급을 위한 사용자 정보가 없습니다.');
+      // this.logger.error('토큰 재발급을 위한 사용자 정보가 없습니다.');
       throw new UnauthorizedException(
         '토큰 재발급을 위한 사용자 정보가 없습니다.',
       );
@@ -246,7 +246,7 @@ export class AuthController {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
-      this.logger.warn(`Refresh 실패: ${errorMessage}`);
+      // this.logger.warn(`Refresh 실패: ${errorMessage}`);
       throw error;
     }
   }

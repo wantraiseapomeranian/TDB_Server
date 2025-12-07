@@ -44,10 +44,10 @@ export class DeviceController {
   async logDeviceEvent(@Body(ValidationPipe) body: DeviceEventDto, @Req() req) {
     // 인증된 기기(토큰의 주체)와 이벤트의 주체가 동일한지 확인
     if (req.user.id !== body.machine_id) {
-        this.logger.warn(`[Device Event] Token machine_id (${req.user.id}) does not match body machine_id (${body.machine_id}).`);
+        // this.logger.warn(`[Device Event] Token machine_id (${req.user.id}) does not match body machine_id (${body.machine_id}).`);
         throw new UnauthorizedException('토큰과 요청 본문의 기기 ID가 일치하지 않습니다.');
     }
-    this.logger.log(`[Device API] Event received from: ${body.machine_id}`);
+    // this.logger.log(`[Device API] Event received from: ${body.machine_id}`);
     return this.deviceService.logEvent(body);
   }
 }

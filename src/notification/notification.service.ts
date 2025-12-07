@@ -49,7 +49,7 @@ export class NotificationService {
 
       await this.notificationRepository.save(notification);
       
-      this.logger.log(`✅ 알림 생성: ${data.user_id} - ${data.title}`);
+      // this.logger.log(`✅ 알림 생성: ${data.user_id} - ${data.title}`);
       
       return {
         success: true,
@@ -85,7 +85,7 @@ export class NotificationService {
         },
       };
     } catch (error) {
-      this.logger.error(`❌ 알림 조회 실패:`, error);
+      // this.logger.error(`❌ 알림 조회 실패:`, error);
       return {
         success: false,
         error: error.message,
@@ -115,7 +115,7 @@ export class NotificationService {
         data: notification,
       };
     } catch (error) {
-      this.logger.error(`❌ 알림 읽음 처리 실패:`, error);
+      // this.logger.error(`❌ 알림 읽음 처리 실패:`, error);
       return {
         success: false,
         error: error.message,
@@ -138,7 +138,7 @@ export class NotificationService {
         message: '모든 알림을 읽음 처리했습니다.',
       };
     } catch (error) {
-      this.logger.error(`❌ 전체 읽음 처리 실패:`, error);
+      // this.logger.error(`❌ 전체 읽음 처리 실패:`, error);
       return {
         success: false,
         error: error.message,
@@ -166,7 +166,7 @@ export class NotificationService {
         return; // 새벽 시간대는 알림 제외
       }
 
-      this.logger.log(`🔔 [Cron] 복용 시간 알림 체크: ${timeOfDay} (${currentHour}시)`);
+      // this.logger.log(`🔔 [Cron] 복용 시간 알림 체크: ${timeOfDay} (${currentHour}시)`);
 
       // 오늘 요일
       const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
@@ -180,7 +180,7 @@ export class NotificationService {
         .andWhere('schedule.time_of_day = :timeOfDay', { timeOfDay })
         .getMany();
 
-      this.logger.log(`📋 발견된 스케줄: ${schedules.length}개`);
+      // this.logger.log(`📋 발견된 스케줄: ${schedules.length}개`);
 
       // 각 스케줄에 대해 알림 생성
       for (const schedule of schedules) {
@@ -201,9 +201,9 @@ export class NotificationService {
         });
       }
 
-      this.logger.log(`✅ 복용 알림 ${schedules.length}개 전송 완료`);
+      // this.logger.log(`✅ 복용 알림 ${schedules.length}개 전송 완료`);
     } catch (error) {
-      this.logger.error(`❌ 복용 시간 알림 체크 실패:`, error);
+      // this.logger.error(`❌ 복용 시간 알림 체크 실패:`, error);
     }
   }
 
@@ -213,7 +213,7 @@ export class NotificationService {
   @Cron('0 9 * * *')
   async checkLowStockAlerts() {
     try {
-      this.logger.log(`🔔 [Cron] 약물 잔량 체크 시작`);
+      // this.logger.log(`🔔 [Cron] 약물 잔량 체크 시작`);
 
       // 잔량이 5개 이하인 슬롯 조회
       const lowStockSlots = await this.machineSlotRepository
@@ -224,7 +224,7 @@ export class NotificationService {
         .andWhere('slot.remain > 0')
         .getMany();
 
-      this.logger.log(`⚠️ 잔량 부족 슬롯: ${lowStockSlots.length}개`);
+      // this.logger.log(`⚠️ 잔량 부족 슬롯: ${lowStockSlots.length}개`);
 
       // 각 슬롯에 대해 해당 그룹의 부모 사용자에게 알림
       for (const slot of lowStockSlots) {
@@ -258,9 +258,9 @@ export class NotificationService {
         });
       }
 
-      this.logger.log(`✅ 잔량 알림 ${lowStockSlots.length}개 전송 완료`);
+      // this.logger.log(`✅ 잔량 알림 ${lowStockSlots.length}개 전송 완료`);
     } catch (error) {
-      this.logger.error(`❌ 약물 잔량 알림 체크 실패:`, error);
+      // this.logger.error(`❌ 약물 잔량 알림 체크 실패:`, error);
     }
   }
 
@@ -278,9 +278,9 @@ export class NotificationService {
         read: true,
       });
 
-      this.logger.log(`🧹 오래된 알림 ${result.affected}개 삭제 완료`);
+      // this.logger.log(`🧹 오래된 알림 ${result.affected}개 삭제 완료`);
     } catch (error) {
-      this.logger.error(`❌ 알림 정리 실패:`, error);
+      // this.logger.error(`❌ 알림 정리 실패:`, error);
     }
   }
 }

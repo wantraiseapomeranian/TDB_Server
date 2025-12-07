@@ -30,7 +30,7 @@ export class QueueController {
   // Swagger를 위한 응답 스키마 정의 추가
   @ApiResponse({ status: 201, description: '성공', type: BuildQueueResponseDto })
   async buildQueue(@Body(ValidationPipe) dto: BuildQueueDto): Promise<BuildQueueResponseDto> {
-    this.logger.log(`[Device API] Queue Build 요청: user ${dto.user_id} for machine ${dto.machine_id}`);
+    // this.logger.log(`[Device API] Queue Build 요청: user ${dto.user_id} for machine ${dto.machine_id}`);
 
     const day = dto.weekday?.toLowerCase()
       ?? inferWeekday(dto.client_ts, dto.tz_offset_min)

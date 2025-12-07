@@ -100,7 +100,7 @@ export class DoseHistoryService {
 
       return await this.doseHistoryRepository.save(doseHistory);
     } catch (error) {
-      console.error('복용 완료 처리 오류:', error);
+      //console.error('복용 완료 처리 오류:', error);
       throw new Error('복용 기록 저장에 실패했습니다.');
     }
   }
@@ -132,7 +132,7 @@ export class DoseHistoryService {
         .addOrderBy('dh.time_of_day', 'ASC')
         .getMany();
     } catch (error) {
-      console.error('복용 기록 조회 오류:', error);
+      //console.error('복용 기록 조회 오류:', error);
       return [];
     }
   }
@@ -168,7 +168,7 @@ export class DoseHistoryService {
         daily_stats: [], // 간단한 버전에서는 빈 배열   
       };
     } catch (error) {
-      console.error('주간 통계 조회 오류:', error);
+      //console.error('주간 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -193,7 +193,7 @@ export class DoseHistoryService {
         .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
         .getMany();
 
-      console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
+      //console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
 
       // 🔥 2. 오늘의 복용 기록 조회 (DoseHistory 테이블)
       const todayHistories = await this.doseHistoryRepository
@@ -202,7 +202,7 @@ export class DoseHistoryService {
         .andWhere('dh.dose_date = :today', { today })
         .getMany();
 
-      console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
+      //console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
 
       // 🔥 3. 스케줄과 복용 기록 병합 (실제 기록만 인정)
             const now = new Date();
@@ -239,27 +239,12 @@ export class DoseHistoryService {
         .filter(schedule => {
           // 🔥 약 이름이 없는 항목은 제외
           if (!schedule.medi_name || schedule.medi_name === '약 이름 없음') {
-            console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
+            //console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
             return false;
           }
           
-          // 🔥 스케줄이 오늘 생성되었고, 생성 시간이 해당 복용 시간보다 늦으면 제외
-          const scheduleCreatedAt = new Date(schedule.schedule_created_at);
-          const isCreatedToday = scheduleCreatedAt >= todayStart && scheduleCreatedAt <= now;
-          
-          if (isCreatedToday && !schedule.status) {
-            // 복용 기록이 없고, 오늘 생성된 스케줄인 경우
-            const timeSlotHour = timeSlotHours[schedule.time_of_day] || 12;
-            const doseTime = new Date(today);
-            doseTime.setHours(timeSlotHour, 0, 0, 0);
-            
-            // 스케줄 생성 시간이 복용 시간보다 늦으면 제외
-            if (scheduleCreatedAt > doseTime) {
-              console.log(`⏭️ [getTodayProgress] 오늘 생성된 스케줄이지만 이미 지난 시간대 제외: ${schedule.time_of_day} (${schedule.medi_name})`);
-              return false;
-            }
-          }
-          
+          // 🔥 오늘 생성된 스케줄은 항상 포함 (제외 없음)
+          // 모든 스케줄을 표시하도록 필터링 로직 제거
           return true;
         });
 
@@ -288,7 +273,7 @@ export class DoseHistoryService {
         completion_rate,
       };
     } catch (error) {
-      console.error('오늘 진행률 조회 오류:', error);
+      //console.error('오늘 진행률 조회 오류:', error);
       return {
         user_id,
         user_name: null,
@@ -333,7 +318,7 @@ export class DoseHistoryService {
         member_count: 0, // 간단한 버전
       };
     } catch (error) {
-      console.error('가족 통계 조회 오류:', error);
+      //console.error('가족 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -373,7 +358,7 @@ export class DoseHistoryService {
         .select(['s.user_id', 's.medi_id', 's.time_of_day', 's.dose'])
         .getMany();
       
-      console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
+      //console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
 
       // 시간대별 분석
       const timeSlots = {
@@ -457,7 +442,7 @@ export class DoseHistoryService {
         lastUpdated: new Date().toISOString()
       };
     } catch (error) {
-      console.error('상세 가족 통계 조회 오류:', error);
+      //console.error('상세 가족 통계 조회 오류:', error);
       return {
         summary: {
           total_scheduled: 0,
@@ -525,7 +510,7 @@ export class DoseHistoryService {
         return Object.values(statusByMedicine);
       }
     } catch (error) {
-      console.error('오늘 복용 완료 상태 조회 오류:', error);
+      //console.error('오늘 복용 완료 상태 조회 오류:', error);
       return medi_id ? { 
         medi_id, 
         date: date || new Date().toISOString().split('T')[0],

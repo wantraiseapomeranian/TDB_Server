@@ -356,7 +356,7 @@ export class MachineService {
 
   // 기기 상태 조회
   async getMachineStatus(machine_id: string) {
-    console.log(`🔍 [MachineService] 기기 상태 조회: machine_id=${machine_id}`);
+    // console.log(`🔍 [MachineService] 기기 상태 조회: machine_id=${machine_id}`);
     
     // TODO: 실제 기기 상태 조회 로직 구현
     return {
@@ -372,7 +372,7 @@ export class MachineService {
 
   // 기기 정보 업데이트
   async updateMachine(id: string, updateData: any) {
-    console.log(`🔍 [MachineService] 기기 업데이트: id=${id}`, updateData);
+    // console.log(`🔍 [MachineService] 기기 업데이트: id=${id}`, updateData);
     
     try {
       // Machine 테이블에서 해당 기기 찾기
@@ -405,7 +405,7 @@ export class MachineService {
 
   // 기기 슬롯 업데이트
   async updateSlots(machine_id: string, slotData: any) {
-    console.log(`🔍 [MachineService] 슬롯 업데이트: machine_id=${machine_id}`, slotData);
+    // console.log(`🔍 [MachineService] 슬롯 업데이트: machine_id=${machine_id}`, slotData);
     
     // TODO: 실제 슬롯 업데이트 로직 구현
     return {
@@ -442,14 +442,14 @@ export class MachineService {
       
       const usedSlotNumbers = usedSlots.map(slot => slot.slot_number);
       
-      console.log(`🎯 [MachineService] 그룹 ${groupId} 슬롯 할당 요청:`);
-      console.log(`🎯 기기: ${machine.machine_id}, 최대 슬롯: ${machine.max_slot}`);
-      console.log(`🎯 현재 사용 중인 슬롯: [${usedSlotNumbers.join(', ')}]`);
-      console.log(`🎯 요청된 슬롯: ${requestedSlot || '자동'}`);
+      // console.log(`🎯 [MachineService] 그룹 ${groupId} 슬롯 할당 요청:`);
+      // console.log(`🎯 기기: ${machine.machine_id}, 최대 슬롯: ${machine.max_slot}`);
+      // console.log(`🎯 현재 사용 중인 슬롯: [${usedSlotNumbers.join(', ')}]`);
+      // console.log(`🎯 요청된 슬롯: ${requestedSlot || '자동'}`);
 
       // 요청된 슬롯이 있고 사용 가능한 경우
       if (requestedSlot && requestedSlot >= 1 && requestedSlot <= machine.max_slot && !usedSlotNumbers.includes(requestedSlot)) {
-        console.log(`🎯 요청된 슬롯 ${requestedSlot}번 사용 가능 - 할당`);
+        // console.log(`🎯 요청된 슬롯 ${requestedSlot}번 사용 가능 - 할당`);
         return { success: true, slot: requestedSlot };
       }
 
@@ -466,7 +466,7 @@ export class MachineService {
         };
       }
 
-      console.log(`🎯 자동 할당: ${targetSlot}번 슬롯`);
+      // console.log(`🎯 자동 할당: ${targetSlot}번 슬롯`);
       return { success: true, slot: targetSlot };
 
     } catch (error) {
@@ -520,7 +520,7 @@ export class MachineService {
 
       await this.machineSlotRepository.save(machineSlot);
 
-      console.log(`🎯 [MachineService] 슬롯 예약 완료: ${mediId} → ${machine.machine_id} 슬롯 ${slotNumber}번`);
+      // console.log(`🎯 [MachineService] 슬롯 예약 완료: ${mediId} → ${machine.machine_id} 슬롯 ${slotNumber}번`);
       return { success: true };
 
     } catch (error) {
@@ -587,7 +587,7 @@ export class MachineService {
         }
       );
 
-      console.log(`🎯 [MachineService] 슬롯 총량 업데이트: ${mediId} → 총 ${totalQuantity}개, 잔여 ${newRemain}개 (슬롯 ${machineSlot.slot_number}번)`);
+      // console.log(`🎯 [MachineService] 슬롯 총량 업데이트: ${mediId} → 총 ${totalQuantity}개, 잔여 ${newRemain}개 (슬롯 ${machineSlot.slot_number}번)`);
       return { success: true };
 
     } catch (error) {
@@ -652,7 +652,7 @@ export class MachineService {
   // ===================================================================
 
   async checkMachine(machineId: string): Promise<{ registered: boolean; register_url?: string }> {
-    console.log(`[Device API] Checking registration for machine: ${machineId}`);
+    // console.log(`[Device API] Checking registration for machine: ${machineId}`);
     const machine = await this.machineRepository.findOne({
       where: { machine_id: machineId },
     });
@@ -666,12 +666,12 @@ export class MachineService {
       };
     }
 
-    console.log(`[Device API] Machine ${machineId} is registered.`);
+    // console.log(`[Device API] Machine ${machineId} is registered.`);
     return { registered: true };
   }
 
   async recordHeartbeat(body: { machine_id: string; status?: string; ts?: number }): Promise<{ status: string }> {
-    console.log(`[Device API] Heartbeat received from ${body.machine_id}, status: ${body.status}`);
+    // console.log(`[Device API] Heartbeat received from ${body.machine_id}, status: ${body.status}`);
     // TODO: 수신된 하트비트 정보를 DB에 기록 (예: last_seen 업데이트)하여 기기 온라인 상태를 모니터링할 수 있습니다.
     // 이를 위해 machine 엔티티에 last_seen 같은 컬럼 추가가 필요합니다.
     
@@ -685,7 +685,7 @@ export class MachineService {
   }
 
   async getMachineConfig(machineId: string): Promise<any> {
-    console.log(`[Device API] Fetching config for machine: ${machineId}`);
+    // console.log(`[Device API] Fetching config for machine: ${machineId}`);
     // TODO: 기기별 설정을 DB에 저장하고, 해당 기기의 설정을 동적으로 반환하도록 개선할 수 있습니다.
     const machine = await this.machineRepository.findOne({ where: { machine_id: machineId }});
     if (!machine) {

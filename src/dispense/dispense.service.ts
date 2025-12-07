@@ -65,11 +65,11 @@ export class DispenseService {
   ) {}
 
   async reportDispense(report: DispenseReportDto) {
-    this.logger.log(`배출 결과 처리 중: user ${report.user_id}, result: ${report.result}`);
+    // this.logger.log(`배출 결과 처리 중: user ${report.user_id}, result: ${report.result}`);
 
     // 'failed' 상태에서는 재고 및 사용자 상태 변경 없이 기록만 함
     if (report.result === 'failed') {
-      this.logger.warn(`배출 실패 보고: user ${report.user_id}. 복용 기록만 저장합니다.`);
+      // this.logger.warn(`배출 실패 보고: user ${report.user_id}. 복용 기록만 저장합니다.`);
       // 여기서 DoseHistory만 저장하는 로직을 추가할 수 있으나, 현재는 아래 트랜잭션 로직에서 처리되도록 둠.
       // 'failed' 시에는 재고 차감, took_today 업데이트가 모두 스킵됨.
     }
@@ -96,24 +96,24 @@ export class DispenseService {
           });
 
           if (!slot) {
-            this.logger.error(`슬롯을 찾을 수 없음: machine=${report.machine_id}, slot=${item.slot}. 트랜잭션을 롤백합니다.`);
+            // this.logger.error(`슬롯을 찾을 수 없음: machine=${report.machine_id}, slot=${item.slot}. 트랜잭션을 롤백합니다.`);
             throw new InternalServerErrorException(`슬롯 정보를 찾을 수 없습니다: ${item.slot}`);
           }
 
           if (slot.remain < item.count) {
-            this.logger.warn(
-                `재고 부족 경고: machine=${report.machine_id}, slot=${item.slot}, ` +
-                `remain=${slot.remain}, requested=${item.count}. 재고는 0으로 차감됩니다.`
-            );
+            // this.logger.warn(
+            //     `재고 부족 경고: machine=${report.machine_id}, slot=${item.slot}, ` +
+            //     `remain=${slot.remain}, requested=${item.count}. 재고는 0으로 차감됩니다.`
+            // );
           }
           
           slot.remain = Math.max(0, slot.remain - item.count);
           await transactionalEntityManager.save(MachineSlot, slot);
 
-          this.logger.log(
-            `재고 차감 완료: machine=${report.machine_id}, slot=${item.slot}, ` +
-            `medi_id=${item.medi_id}, count=${item.count}, new_remain=${slot.remain}`
-          );
+          // this.logger.log(
+          //   `재고 차감 완료: machine=${report.machine_id}, slot=${item.slot}, ` +
+          //   `medi_id=${item.medi_id}, count=${item.count}, new_remain=${slot.remain}`
+          // );
         }
       }
 
@@ -135,9 +135,9 @@ export class DispenseService {
 
         if (existingHistory) {
           // 기존 기록이 있으면 업데이트 (수동 체크로 덮어쓰기 방지)
-          this.logger.log(
-            `기존 복용 기록 발견, 업데이트: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`
-          );
+          // this.logger.log(
+          //   `기존 복용 기록 발견, 업데이트: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`
+          // );
           existingHistory.actual_dose = itemActualDose; // 🔥 각 약물별 count 사용
           existingHistory.status = report.result as DoseStatus;
           existingHistory.completed_at = new Date();
@@ -162,18 +162,18 @@ export class DispenseService {
             notes: `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`
           });
           await transactionalEntityManager.save(DoseHistory, historyEntry);
-          this.logger.log(`복용 기록 생성 완료: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`);
+          // this.logger.log(`복용 기록 생성 완료: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose}`);
         }
       }
       
-      this.logger.log(`복용 기록 처리 완료: user ${report.user_id}, items=${report.items.length}개`);
+      // this.logger.log(`복용 기록 처리 완료: user ${report.user_id}, items=${report.items.length}개`);
 
       let tookToday = user.took_today;
       if (report.result === 'completed') {
           user.took_today = 1;
           await transactionalEntityManager.save(User, user);
           tookToday = 1;
-          this.logger.log(`사용자 ${report.user_id}의 took_today 상태를 1로 업데이트했습니다 (time: ${report.time})`);
+          // this.logger.log(`사용자 ${report.user_id}의 took_today 상태를 1로 업데이트했습니다 (time: ${report.time})`);
       }
 
       return {

@@ -204,9 +204,9 @@ export class FamilyService {
 
     await this.membershipRepo.save(childMembership);
 
-    console.log(`[FamilyService] 자식 계정 생성: ${data.name}`);
-    console.log(`  부모 그룹: ${parentMembership.group_id}`);
-    console.log(`  자식 user_id: ${savedChild.user_id}`);
+    // console.log(`[FamilyService] 자식 계정 생성: ${data.name}`);
+    // console.log(`  부모 그룹: ${parentMembership.group_id}`);
+    // console.log(`  자식 user_id: ${savedChild.user_id}`);
 
     return {
       user_id: savedChild.user_id,

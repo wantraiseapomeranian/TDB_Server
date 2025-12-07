@@ -51,7 +51,7 @@ export class UsersController {
   // 🔥 디스펜서 등록 API
   @Post('register-dispenser')
   async registerDispenser(@Body() body: { userId: string; machine_id: string }) {
-    console.log(`[Controller] 디스펜서 등록 요청: userId=${body.userId}, machine_id=${body.machine_id}`);
+    // console.log(`[Controller] 디스펜서 등록 요청: userId=${body.userId}, machine_id=${body.machine_id}`);
     
     const result = await this.usersService.registerDispenser(body.userId, body.machine_id);
     return { success: true, data: result };
@@ -67,7 +67,7 @@ export class UsersController {
   // 🔥 디스펜서 정보 조회 API
   @Get(':userId/dispenser-info')
   async getDispenserInfo(@Param('userId') userId: string) {
-    console.log(`[Controller] 디스펜서 정보 조회 요청: userId=${userId}`);
+    // console.log(`[Controller] 디스펜서 정보 조회 요청: userId=${userId}`);
     
     const result = await this.usersService.getDispenserInfo(userId);
     return { success: true, data: result };
@@ -80,7 +80,7 @@ export class UsersController {
     role?: UserRole; 
     parentUserId?: string 
   }) {
-    console.log(`[Controller] 사용자 생성 요청:`, body.userData);
+    // console.log(`[Controller] 사용자 생성 요청:`, body.userData);
     
     const result = await this.usersService.createUser(
       body.userData, 
@@ -108,7 +108,7 @@ export class UsersCompatController {
   // 🔥 디스펜서 등록 API - 프론트엔드 호환 경로
   @Post('register-dispenser')
   async registerDispenser(@Body() body: { userId: string; machine_id: string }) {
-    console.log(`[CompatController] 프론트엔드 호환 디스펜서 등록: userId=${body.userId}, machine_id=${body.machine_id}`);
+    // console.log(`[CompatController] 프론트엔드 호환 디스펜서 등록: userId=${body.userId}, machine_id=${body.machine_id}`);
     
     const result = await this.usersService.registerDispenser(body.userId, body.machine_id);
     return { success: true, data: result };
@@ -118,7 +118,7 @@ export class UsersCompatController {
   @Get('profile')
   async getProfile() {
     // TODO: 실제 프로필 로직 구현 필요
-    console.log(`[CompatController] 프로필 조회 요청 - 구현 필요`);
+    // console.log(`[CompatController] 프로필 조회 요청 - 구현 필요`);
     return { 
       success: true, 
       data: { message: '프로필 API는 아직 구현되지 않았습니다.' }
@@ -129,7 +129,7 @@ export class UsersCompatController {
   @Post('profile')
   async updateProfile(@Body() body: any) {
     // TODO: 실제 프로필 업데이트 로직 구현 필요
-    console.log(`[CompatController] 프로필 업데이트 요청 - 구현 필요`, body);
+    // console.log(`[CompatController] 프로필 업데이트 요청 - 구현 필요`, body);
     return { 
       success: true, 
       data: { message: '프로필 업데이트 API는 아직 구현되지 않았습니다.' }
