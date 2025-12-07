@@ -81,7 +81,6 @@ export class ScheduleService {
     requestUserId?: string
   ) {
     try {
-      //console.log(`🔥 [ScheduleService] 매트릭스 스케줄 저장 시작: ${medicineId}/${memberId}`);
 
       // 1. 사용자 그룹 정보 조회
       const { user, group, membership } = await this.getUserGroup(memberId);
@@ -147,7 +146,6 @@ export class ScheduleService {
         });
 
       const savedSchedules = await this.scheduleRepo.save(newSchedules);
-      //console.log(`🔥 [ScheduleService] ${savedSchedules.length}개 스케줄 저장 완료`);
 
       // 🔥 7. 오늘 날짜의 불필요한 복용 기록 정리
       // 새 스케줄에서 제거된 시간대의 복용 기록을 삭제
@@ -171,12 +169,6 @@ export class ScheduleService {
       
       // 제거된 시간대의 오늘 복용 기록 삭제
       if (removedTimeSlots.length > 0) {
-        // console.log(`🔥 [ScheduleService] 오늘(${currentDayOfWeek}) 제거된 시간대의 복용 기록 삭제:`, {
-        //   medicineId,
-        //   memberId,
-        //   today,
-        //   removedTimeSlots
-        // });
         
         for (const timeSlot of removedTimeSlots) {
           await this.doseHistoryRepo.delete({
@@ -187,7 +179,6 @@ export class ScheduleService {
           });
         }
         
-        //console.log(`✅ [ScheduleService] ${removedTimeSlots.length}개 시간대의 복용 기록 삭제 완료`);
       }
 
       // 6. MachineSlot 업데이트 (totalQuantity가 있는 경우)
@@ -203,7 +194,7 @@ export class ScheduleService {
       };
 
     } catch (error) {
-      //console.error('🔥 [ScheduleService] 매트릭스 스케줄 저장 실패:', error);
+      console.error('🔥 [ScheduleService] 매트릭스 스케줄 저장 실패:', error);
       throw error;
     }
   }
@@ -223,13 +214,11 @@ export class ScheduleService {
     }
 
     if (parsedQuantity <= 0) {
-      //console.log(`[ScheduleService] totalQuantity가 유효하지 않음: ${totalQuantity}`);
       return;
     }
 
     // 권한 확인 (부모만 수량 업데이트 가능)
     if (requestMembership && requestMembership.role !== UserRole.PARENT) {
-      //console.log(`[ScheduleService] 권한 없음: ${requestMembership.role} (보호자만 수량 설정 가능)`);
       return;
     }
 
@@ -240,7 +229,6 @@ export class ScheduleService {
       });
 
       if (machines.length === 0) {
-        //console.log(`[ScheduleService] 그룹 ${groupId}에 등록된 기계가 없음`);
         return;
       }
 
@@ -255,13 +243,12 @@ export class ScheduleService {
           machineSlot.total = parsedQuantity;
           machineSlot.remain = parsedQuantity;
           await this.machineSlotRepo.save(machineSlot);
-          //console.log(`[ScheduleService] 슬롯 업데이트: ${machine.machine_id} - ${mediId}, total=${parsedQuantity}`);
           break; // 첫 번째 슬롯만 업데이트
         }
       }
 
     } catch (error) {
-      //console.error('[ScheduleService] MachineSlot 업데이트 오류:', error);
+      console.error('[ScheduleService] MachineSlot 업데이트 오류:', error);
     }
   }
 
@@ -274,7 +261,6 @@ export class ScheduleService {
     doseCount?: string,
     requestUserId?: string,
   ) {
-    //console.log('[ScheduleService] 스케줄 저장:', { medicineId, memberId, scheduleData, totalQuantity });
 
     // 나이 유효성 검사
     const validationResult = await this.validateUserAge(memberId, medicineId);
@@ -353,8 +339,6 @@ export class ScheduleService {
       eveningDose?: number;
     }
   ) {
-    //console.log('[ScheduleService] 타임도스 스케줄 저장:', { medicineId, memberId, timeDoses });
-
     const { user, group } = await this.getUserGroup(memberId);
 
     const medicine = await this.medicineRepo.findOne({
@@ -439,9 +423,6 @@ export class ScheduleService {
   async getSchedule(medicineId: string, memberId: string) {
     const { user, group } = await this.getUserGroup(memberId);
 
-    //console.log(`[ScheduleService] 스케줄 조회: ${medicineId}/${memberId}, group: ${group.group_id}`);
-    //console.log(`[DEBUG] getSchedule - User ${memberId} belongs to group_id: ${group.group_id}`); // Log user's group_id
-    //console.log(`[DEBUG] getSchedule - Querying for medicineId: ${medicineId}`); // Log medicineId
 
     // 스케줄 조회
     const schedules = await this.scheduleRepo.find({
@@ -460,10 +441,8 @@ export class ScheduleService {
       .andWhere('slot.medi_id = :medi_id', { medi_id: medicineId })
       .getMany();
 
-    //console.log(`[DEBUG] getSchedule - MachineSlots query result length: ${machineSlots.length}`); // Log machineSlots length
     if (machineSlots.length > 0) {
       // Removed the problematic log line, as machine.machine_id should now be accessible
-      //console.log(`[DEBUG] getSchedule - Found MachineSlot for machine_id: ${machineSlots[0].machine.machine_id}, group_id: ${machineSlots[0].machine.group_id}`);
     }
 
     const slotInfo = machineSlots.length > 0 ? machineSlots[0] : null;
@@ -503,7 +482,7 @@ export class ScheduleService {
         message: '복용이 완료되었습니다.'
       };
     } catch (error) {
-      //console.error('복용 완료 처리 오류:', error);
+      console.error('복용 완료 처리 오류:', error);
       return {
         success: false,
         message: '복용 완료 처리에 실패했습니다.'
@@ -687,7 +666,7 @@ export class ScheduleService {
         warnings: result.warnings
       };
     } catch (error) {
-      //console.error('나이 유효성 검사 오류:', error);
+      console.error('나이 유효성 검사 오류:', error);
       return {
         allowed: true, // 기본적으로 허용
         warnings: ['나이 유효성 검사 중 오류가 발생했습니다.']
@@ -700,7 +679,6 @@ export class ScheduleService {
    */
   async deleteSchedule(mediId: string, userId: string) {
     try {
-      //console.log(`🔥 [ScheduleService] 스케줄 삭제: mediId=${mediId}, userId=${userId}`);
 
       // 1. 사용자 그룹 정보 조회
       const { user, group } = await this.getUserGroup(userId);
@@ -715,7 +693,6 @@ export class ScheduleService {
       });
 
       if (schedules.length === 0) {
-        //console.log(`⚠️ [ScheduleService] 삭제할 스케줄이 없습니다: mediId=${mediId}, userId=${userId}`);
         return {
           success: true,
           message: '삭제할 스케줄이 없습니다.',
@@ -730,7 +707,6 @@ export class ScheduleService {
         group_id: group.group_id
       });
 
-      //console.log(`✅ [ScheduleService] 스케줄 삭제 완료: ${result.affected}개 삭제됨`);
 
       return {
         success: true,
@@ -739,7 +715,7 @@ export class ScheduleService {
       };
 
     } catch (error) {
-      //console.error(`🚨 [ScheduleService] 스케줄 삭제 에러:`, error);
+      console.error(`🚨 [ScheduleService] 스케줄 삭제 에러:`, error);
       return {
         success: false,
         error: {

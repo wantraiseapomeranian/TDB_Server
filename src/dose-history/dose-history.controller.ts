@@ -148,6 +148,27 @@ export class DoseHistoryController {
     }
   }
 
+  // 🔥 배치 API: 가족 전체의 오늘 스케줄 한 번에 조회
+  @Get('family-today-schedules/:group_id')
+  async getFamilyTodaySchedules(@Param('group_id') group_id: string) {
+    try {
+      const result = await this.doseHistoryService.getFamilyTodaySchedules(group_id);
+      
+      return {
+        success: true,
+        message: '가족 오늘 스케줄을 조회했습니다.',
+        data: result,
+      };
+    } catch (error) {
+      console.error('가족 오늘 스케줄 조회 오류:', error);
+      return {
+        success: false,
+        message: error.message || '가족 오늘 스케줄 조회에 실패했습니다.',
+        data: { members: [] },
+      };
+    }
+  }
+
   // 🔥 새로 추가: 오늘의 복용 완료 상태 조회 (시간대별)
   @Get('today-status')
   async getTodayCompletionStatus(

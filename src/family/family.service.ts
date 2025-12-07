@@ -179,7 +179,7 @@ export class FamilyService {
     });
 
     if (!parentMembership) {
-      throw new NotFoundException('부모 사용자의 그룹 정보를 찾을 수 없습니다.');
+      throw new NotFoundException('보호자 사용자의 그룹 정보를 찾을 수 없습니다.');
     }
 
     // 자식 사용자 생성
@@ -204,9 +204,6 @@ export class FamilyService {
 
     await this.membershipRepo.save(childMembership);
 
-    // console.log(`[FamilyService] 자식 계정 생성: ${data.name}`);
-    // console.log(`  부모 그룹: ${parentMembership.group_id}`);
-    // console.log(`  자식 user_id: ${savedChild.user_id}`);
 
     return {
       user_id: savedChild.user_id,

@@ -27,7 +27,6 @@ export class ScheduleController {
    */
   @Get('validate-age/:userId')
   async validateUserAge(@Param('userId') userId: string) {
-    // console.log(`🔍 [Controller] 클라이언트 연령 검증: userId=${userId}`);
     
     try {
       // Users 테이블에서 나이 정보 조회
@@ -91,11 +90,9 @@ export class ScheduleController {
     @Param('medicineId') medicineId: string,
     @Param('userId') userId: string,
   ) {
-    // console.log(`🔍 [Controller] 현재 시간 복용량 조회: medicineId=${medicineId}, userId=${userId}`);
     
     const result = await this.scheduleService.getCurrentDose(medicineId, userId);
     
-    // console.log(`🔍 [Controller] 현재 복용량 조회 결과:`, result);
     
     return {
       success: true,
@@ -112,11 +109,9 @@ export class ScheduleController {
     @Param('userId') userId: string,
     @Query('date') date?: string,
   ) {
-    // console.log(`🔍 [Controller] 하루 스케줄 조회: medicineId=${medicineId}, userId=${userId}, date=${date}`);
     
     const result = await this.scheduleService.getDailySchedule(medicineId, userId, date);
     
-    // console.log(`🔍 [Controller] 하루 스케줄 조회 결과:`, result);
     
     return {
       success: true,
@@ -144,8 +139,7 @@ export class ScheduleController {
       request_user_id?: string;  // 🔥 요청자 정보 추가
     },
   ) {
-    // console.log(` [V3 Controller] 매트릭스 스케줄 저장: ${medicineId}/${memberId}`);
-    // console.log(` [V3 Controller] Body:`, JSON.stringify(body, null, 2));
+    
     
     if (body.version === 'v3' && body.matrix_enabled) {
       return this.scheduleService.saveMatrixSchedule(
@@ -168,16 +162,10 @@ export class ScheduleController {
     @Param('medicineId') medicineId: string,
     @Body() body: CreateMedicineScheduleDto, 
   ) {
-    // console.log('Controller에서 받은 body 전체:', JSON.stringify(body, null, 2));
-    // console.log('medicineId:', medicineId);
+    
     
     // 🔥 시간대별 복용량 처리
-    // console.log(`[Controller] 🔍 받은 시간대별 복용량:`, {
-    //   morningDose: body.morningDose,
-    //   afternoonDose: body.afternoonDose,
-    //   eveningDose: body.eveningDose,
-    //   doseCount: body.doseCount
-    // });
+    
     
     return this.scheduleService.saveScheduleWithTimeDoses(
       medicineId,
@@ -202,17 +190,14 @@ export class ScheduleController {
     @Param('medicineId') medicineId: string,
     @Query('memberId') memberId: string,
   ) {
-    // console.log(`[Controller] 스케줄 조회 요청: medicineId=${medicineId}, memberId=${memberId}`);
     
     const result = await this.scheduleService.getSchedule(medicineId, memberId);
     const schedules = result.data.schedules;
     const slotInfo = result.data.slotInfo;
     
-    // console.log(`[Controller] 조회된 스케줄 개수: ${schedules.length}`);
     
     // 🔥 빈 배열인 경우 기본값으로 응답
     if (schedules.length === 0) {
-      // console.log(`[Controller] 스케줄이 없어서 기본값 반환`);
       
       const defaultSchedule = {
         mon: { morning: false, afternoon: false, evening: false },
@@ -240,14 +225,7 @@ export class ScheduleController {
     
     // 🔥 스케줄이 있는 경우 기존 로직 수행
     if (schedules.length > 0) {
-      // console.log(`[Controller] 첫 번째 스케줄 정보:`, {
-      //   user_id: schedules[0].user_id,
-      //   dose: schedules[0].dose,
-      //   day_of_week: schedules[0].day_of_week,
-      //   time_of_day: schedules[0].time_of_day,
-      //   machine_total: slotInfo?.total,
-      //   machine_slot: slotInfo?.slot_number
-      // });
+      
     }
     
     // 🔥 프론트엔드가 기대하는 형태로 변환
@@ -284,24 +262,19 @@ export class ScheduleController {
       }
     });
     
-    // console.log(`[Controller] 변환된 스케줄 데이터:`, JSON.stringify(schedule, null, 2));
     
     // 🔥 시간대별 복용량 로그
-    // console.log(`[Controller] 🔍 시간대별 복용량:`);
-    // console.log(`[Controller]   - 아침: ${timeDoses.morningDose}정`);
-    // console.log(`[Controller]   - 점심: ${timeDoses.afternoonDose}정`);
-    // console.log(`[Controller]   - 저녁: ${timeDoses.eveningDose}정`);
+    
     
     // 🔥 모든 스케줄의 복용량이 동일한지 확인
     const allDoses = schedules.map(s => s.dose);
     const uniqueDoses = [...new Set(allDoses)];
-    // console.log(`[Controller]   - 모든 스케줄의 복용량: [${allDoses.join(', ')}]`);
-    // console.log(`[Controller]   - 고유 복용량: [${uniqueDoses.join(', ')}]`);
+    
     
     if (uniqueDoses.length > 1) {
-      // console.log(`[Controller] ⚠️ 시간대별로 복용량이 다름 - 시간대별 반환`);
+      
     } else {
-      // console.log(`[Controller] ✅ 모든 스케줄의 복용량이 동일: ${uniqueDoses[0]}`);
+      
     }
     
     const responseData = {
@@ -319,15 +292,6 @@ export class ScheduleController {
       }
     };
     
-    // console.log(`[Controller] 응답 데이터:`, {
-    //   totalQuantity: responseData.data.totalQuantity,
-    //   morningDose: responseData.data.morningDose,
-    //   afternoonDose: responseData.data.afternoonDose,
-    //   eveningDose: responseData.data.eveningDose,
-    //   doseCount: responseData.data.doseCount,
-    //   slot: responseData.data.slot,
-    //   scheduleCount: schedules.length
-    // });
     
     return responseData;
   }
@@ -345,7 +309,6 @@ export class ScheduleController {
       notes?: string;
     }
   ) {
-    // console.log('🔥 [Controller] 복용 완료 처리:', body);
     
     try {
       const result = await this.scheduleService.completeDose(
@@ -381,7 +344,6 @@ export class ScheduleController {
     @Param('userId') userId: string,
     @Query('date') date?: string,
   ) {
-    // console.log('🔥 [Controller] 복용 기록 조회:', { medicineId, userId, date });
     
     try {
       const result = await this.scheduleService.getDoseHistory(medicineId, userId, date);
@@ -409,7 +371,6 @@ export class ScheduleController {
     @Param('userId') userId: string,
     @Query('medicineId') medicineId?: string,
   ) {
-    // console.log('🔥 [Controller] 주간 통계 조회:', { userId, medicineId });
     
     try {
       const result = await this.scheduleService.getWeeklyStats(userId, medicineId);
@@ -450,7 +411,6 @@ export class ScheduleController {
    */
   @Get('family/summary')
   async getFamilyMedicineSummaryCompat(@Query('connect') connect: string) {
-    // console.log('🔥 [Controller] 프론트엔드 호환 가족 요약 조회:', connect);
     return this.scheduleService.getFamilySummary(connect);
   }
 
@@ -490,7 +450,6 @@ export class ScheduleController {
     @Param('supplementId') supplementId: string,
     @Param('memberId') memberId: string,
   ) {
-    // console.log(`🔥 [Controller] 영양제 스케줄 삭제: supplementId=${supplementId}, memberId=${memberId}`);
     return this.scheduleService.deleteSchedule(supplementId, memberId);
   }
 
@@ -502,7 +461,6 @@ export class ScheduleController {
     @Param('medicineId') medicineId: string,
     @Param('memberId') memberId: string,
   ) {
-    // console.log(`🔥 [Controller] 약물 스케줄 삭제: medicineId=${medicineId}, memberId=${memberId}`);
     return this.scheduleService.deleteSchedule(medicineId, memberId);
   }
 }

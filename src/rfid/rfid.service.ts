@@ -17,14 +17,12 @@ export class RfidService {
 
   async resolveRfid(uid: string) {
     const upperCaseUid = uid.toUpperCase();
-    // this.logger.log(`RFID로 사용자 검색: ${upperCaseUid}`);
 
     const user = await this.userRepository.findOne({
       where: { k_uid: upperCaseUid },
     });
 
     if (!user) {
-      // this.logger.warn(`등록되지 않은 RFID UID: ${upperCaseUid}`);
       return { 
         registered: false,
         register_url: `https://app.example.com/kit/register?uid=${upperCaseUid}`
@@ -37,7 +35,7 @@ export class RfidService {
 
     if (!membership) {
         // This case should ideally not happen for a registered user
-        // this.logger.error(`사용자 ${user.user_id}의 그룹 정보를 찾을 수 없습니다.`);
+        this.logger.error(`사용자 ${user.user_id}의 그룹 정보를 찾을 수 없습니다.`);
         return {
             registered: true,
             user_id: user.user_id,
@@ -46,7 +44,6 @@ export class RfidService {
         }
     }
 
-    // this.logger.log(`사용자 확인: ${user.user_id}, 그룹: ${membership.group_id}`);
     return {
       registered: true,
       user_id: user.user_id,

@@ -17,7 +17,6 @@ export class NotificationController {
     @Query('limit') limit?: number,
     @Query('offset') offset?: number,
   ) {
-    // console.log(`🔥 [NotificationController] 알림 목록 조회: userId=${userId}`);
     
     const result = await this.notificationService.getNotifications(
       userId,
@@ -37,7 +36,6 @@ export class NotificationController {
     userId?: string;
     markAll?: boolean;
   }) {
-    // console.log(`🔥 [NotificationController] 알림 읽음 처리:`, data);
     
     if (data.markAll && data.userId) {
       return await this.notificationService.markAllAsRead(data.userId);
@@ -58,7 +56,6 @@ export class NotificationController {
    */
   @Put('read/:id')
   async markNotificationAsRead(@Param('id') id: string) {
-    // console.log(`🔥 [NotificationController] 알림 읽음 처리 (PUT): id=${id}`);
     
     return await this.notificationService.markAsRead(id);
   }
@@ -74,7 +71,6 @@ export class NotificationController {
     message: string;
     data?: any;
   }) {
-    // console.log(`🔥 [NotificationController] 알림 생성:`, data);
     
     return await this.notificationService.createNotification({
       user_id: data.userId,

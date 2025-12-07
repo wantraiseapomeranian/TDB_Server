@@ -33,7 +33,6 @@ export class DispenserController {
       throw new BadRequestException('k_uid와 machine_id가 필요합니다.');
     }
 
-    // console.log(`🔥 [DispenserController] RFID 자동배출 요청:`, body);
     return this.dispenserService.rfidAutoDispense(body.k_uid, body.machine_id);
   }
 
@@ -57,7 +56,6 @@ export class DispenserController {
       throw new BadRequestException('필수 파라미터가 누락되었습니다.');
     }
 
-    // console.log(`🔥 [DispenserController] 스케줄 기반 수동배출 요청:`, body);
     return this.dispenserService.scheduleDispense(body);
   }
 
@@ -70,7 +68,6 @@ export class DispenserController {
       throw new BadRequestException('machine_id 파라미터가 필요합니다.');
     }
 
-    // console.log(`🔥 [DispenserController] 기기 상태 조회: machine_id=${machine_id}`);
     return this.dispenserService.getMachineStatus(machine_id);
   }
 
@@ -79,7 +76,6 @@ export class DispenserController {
    */
   @Get('status/:machine_id')
   async getMachineStatusByPath(@Param('machine_id') machine_id: string) {
-    // console.log(`🔥 [DispenserController] 경로 방식 기기 상태 조회: machine_id=${machine_id}`);
     return this.dispenserService.getMachineStatus(machine_id);
   }
 
@@ -91,7 +87,6 @@ export class DispenserController {
     @Query('machine_id') machine_id?: string,
     @Query('userId') userId?: string,
   ) {
-    // console.log(`🔥 [DispenserController] 디스펜스 목록 조회: machine_id=${machine_id}, userId=${userId}`);
     return this.dispenserService.getDispenseList(machine_id, userId);
   }
 
@@ -100,7 +95,6 @@ export class DispenserController {
    */
   @Get('slot-status')
   async getSlotStatus(@Query('machine_id') machine_id?: string) {
-    // console.log(`🔥 [DispenserController] 슬롯 상태 조회: machine_id=${machine_id}`);
     return this.dispenserService.getSlotStatus(machine_id);
   }
 
@@ -113,7 +107,6 @@ export class DispenserController {
       throw new BadRequestException('machine_id 파라미터가 필요합니다.');
     }
 
-    // console.log(`🔥 [DispenserController] 기기별 사용자 목록 조회: machine_id=${machine_id}`);
     
     // TODO: 실제 사용자 목록 조회 로직 구현
     return {
@@ -138,7 +131,6 @@ export class DispenserController {
       throw new BadRequestException('machine_id 파라미터가 필요합니다.');
     }
 
-    // console.log(`🔥 [DispenserController] 기기별 스케줄 조회: machine_id=${machine_id}, date=${date}`);
     return this.dispenserService.getDispenseList(machine_id);
   }
 
@@ -147,7 +139,6 @@ export class DispenserController {
    */
   @Get('debug/slots/:machine_id')
   async debugSlots(@Param('machine_id') machine_id: string) {
-    // console.log(`🔍 [DispenserController] 슬롯 디버깅: ${machine_id}`);
     return this.dispenserService.debugAllSlots(machine_id);
   }
 
@@ -164,7 +155,6 @@ export class DispenserController {
       userId: string;
     },
   ) {
-    // console.log(`🔥 [DispenserController] UID 검증 (호환성):`, body);
     
     // TODO: 실제 UID 검증 로직 구현
     return {
@@ -193,7 +183,6 @@ export class DispenserController {
       timestamp: string;
     },
   ) {
-    // console.log(`🔥 [DispenserController] 디스펜스 결과 (호환성):`, body);
     
     // TODO: 디스펜스 결과 처리 로직 구현
     return {
@@ -218,7 +207,6 @@ export class DispenserController {
       action: string;
     },
   ) {
-    // console.log(`🔥 [DispenserController] 디스펜스 확인 (호환성):`, body);
     
     return {
       success: true,

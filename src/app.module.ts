@@ -19,6 +19,7 @@ import { RfidModule } from './rfid/rfid.module';
 import { QueueModule } from './queue/queue.module';
 import { DispenseModule } from './dispense/dispense.module';
 import { DeviceModule } from './device/device.module';
+import { MedicineMasterModule } from './medicine-master/medicine-master.module';
 
 // Entities
 import { User } from './users/entities/users.entity';
@@ -29,6 +30,8 @@ import { Machine } from './machine/entities/machine.entity';
 import { MachineSlot } from './machine/entities/machine-slot.entity';
 import { Schedule } from './schedule/entities/schedule.entity';
 import { DoseHistory } from './dose-history/dose-history.entity';
+import { MedicineMaster } from './medicine-master/entities/medicine-master.entity';
+import { TabletMaster } from './medicine-master/entities/tablet-master.entity';
 
 @Module({
   imports: [
@@ -51,7 +54,7 @@ import { DoseHistory } from './dose-history/dose-history.entity';
         username: configService.get('DB_USERNAME', 'root'),
         password: configService.get('DB_PASSWORD', ''),
         database: configService.get('DB_DATABASE', 'TDB'),
-        entities: [User, UserGroup, UserGroupMembership, Medicine, Machine, MachineSlot, Schedule, DoseHistory],
+        entities: [User, UserGroup, UserGroupMembership, Medicine, Machine, MachineSlot, Schedule, DoseHistory, MedicineMaster, TabletMaster],
         synchronize: false,
         logging: configService.get('NODE_ENV') === 'development',
         timezone: '+09:00',
@@ -76,6 +79,7 @@ import { DoseHistory } from './dose-history/dose-history.entity';
     QueueModule,
     DispenseModule,
     DeviceModule,
+    MedicineMasterModule,
   ],
 })
 export class AppModule {}

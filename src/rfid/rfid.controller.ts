@@ -22,7 +22,6 @@ export class RfidController {
   @ApiOperation({ summary: 'RFID UID로 사용자 식별 (신규)' })
   @ApiBearerAuth()
   async resolveRfid(@Body(ValidationPipe) body: RfidResolveDto) {
-    // this.logger.log(`[Device API] RFID Resolve 요청: ${body.uid}`);
     return this.rfidService.resolveRfid(body.uid);
   }
 }

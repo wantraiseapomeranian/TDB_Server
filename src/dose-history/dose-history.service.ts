@@ -5,6 +5,7 @@ import { DoseHistory, DoseStatus } from './dose-history.entity';
 import { Schedule } from '../schedule/entities/schedule.entity';
 import { User } from '../users/entities/users.entity';
 import { UserGroupMembership } from '../users/entities/user-group-membership.entity';
+import { Medicine } from '../shared/entities/medicine.entity';
 import { UserRole } from '../users/entities/user-role.enum';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -19,6 +20,8 @@ export class DoseHistoryService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserGroupMembership)
     private readonly membershipRepository: Repository<UserGroupMembership>,
+    @InjectRepository(Medicine)
+    private readonly medicineRepository: Repository<Medicine>,
   ) {}
 
   // 사용자의 그룹 정보 조회 헬퍼 메서드
@@ -100,7 +103,7 @@ export class DoseHistoryService {
 
       return await this.doseHistoryRepository.save(doseHistory);
     } catch (error) {
-      //console.error('복용 완료 처리 오류:', error);
+      console.error('복용 완료 처리 오류:', error);
       throw new Error('복용 기록 저장에 실패했습니다.');
     }
   }
@@ -132,7 +135,7 @@ export class DoseHistoryService {
         .addOrderBy('dh.time_of_day', 'ASC')
         .getMany();
     } catch (error) {
-      //console.error('복용 기록 조회 오류:', error);
+      console.error('복용 기록 조회 오류:', error);
       return [];
     }
   }
@@ -168,7 +171,7 @@ export class DoseHistoryService {
         daily_stats: [], // 간단한 버전에서는 빈 배열   
       };
     } catch (error) {
-      //console.error('주간 통계 조회 오류:', error);
+      console.error('주간 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -193,7 +196,7 @@ export class DoseHistoryService {
         .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
         .getMany();
 
-      //console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
+      console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
 
       // 🔥 2. 오늘의 복용 기록 조회 (DoseHistory 테이블)
       const todayHistories = await this.doseHistoryRepository
@@ -202,7 +205,7 @@ export class DoseHistoryService {
         .andWhere('dh.dose_date = :today', { today })
         .getMany();
 
-      //console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
+      console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
 
       // 🔥 3. 스케줄과 복용 기록 병합 (실제 기록만 인정)
             const now = new Date();
@@ -239,7 +242,7 @@ export class DoseHistoryService {
         .filter(schedule => {
           // 🔥 약 이름이 없는 항목은 제외
           if (!schedule.medi_name || schedule.medi_name === '약 이름 없음') {
-            //console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
+            console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
             return false;
           }
           
@@ -273,7 +276,7 @@ export class DoseHistoryService {
         completion_rate,
       };
     } catch (error) {
-      //console.error('오늘 진행률 조회 오류:', error);
+      console.error('오늘 진행률 조회 오류:', error);
       return {
         user_id,
         user_name: null,
@@ -318,7 +321,7 @@ export class DoseHistoryService {
         member_count: 0, // 간단한 버전
       };
     } catch (error) {
-      //console.error('가족 통계 조회 오류:', error);
+      console.error('가족 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -358,7 +361,7 @@ export class DoseHistoryService {
         .select(['s.user_id', 's.medi_id', 's.time_of_day', 's.dose'])
         .getMany();
       
-      //console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
+      console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
 
       // 시간대별 분석
       const timeSlots = {
@@ -442,7 +445,7 @@ export class DoseHistoryService {
         lastUpdated: new Date().toISOString()
       };
     } catch (error) {
-      //console.error('상세 가족 통계 조회 오류:', error);
+      console.error('상세 가족 통계 조회 오류:', error);
       return {
         summary: {
           total_scheduled: 0,
@@ -510,7 +513,7 @@ export class DoseHistoryService {
         return Object.values(statusByMedicine);
       }
     } catch (error) {
-      //console.error('오늘 복용 완료 상태 조회 오류:', error);
+      console.error('오늘 복용 완료 상태 조회 오류:', error);
       return medi_id ? { 
         medi_id, 
         date: date || new Date().toISOString().split('T')[0],
@@ -535,5 +538,123 @@ export class DoseHistoryService {
       user_name: h.user ? h.user.name : '알 수 없음',
       result: h.status,
     }));
+  }
+
+  // ===================================================================
+  //  🔥 배치 API: 가족 전체의 오늘 스케줄 한 번에 조회
+  // ===================================================================
+  async getFamilyTodaySchedules(group_id: string) {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+
+      // 1. 가족 구성원 정보 조회
+      const familyMembers = await this.membershipRepository
+        .createQueryBuilder('membership')
+        .innerJoin('membership.user', 'user')
+        .where('membership.group_id = :group_id', { group_id })
+        .select(['user.user_id', 'user.name', 'membership.role'])
+        .getRawMany();
+
+      if (familyMembers.length === 0) {
+        return {
+          members: []
+        };
+      }
+
+      const memberIds = familyMembers.map(m => m.user_user_id);
+
+      // 2. 오늘의 모든 스케줄 조회 (약물 + 영양제)
+      const todaySchedules = await this.scheduleRepository
+        .createQueryBuilder('schedule')
+        .leftJoinAndSelect('schedule.medicine', 'medicine')
+        .where('schedule.group_id = :group_id', { group_id })
+        .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
+        .andWhere('schedule.user_id IN (:...memberIds)', { memberIds })
+        .select([
+          'schedule.user_id',
+          'schedule.medi_id',
+          'schedule.time_of_day',
+          'schedule.dose',
+          'schedule.created_at',
+          'medicine.name'
+        ])
+        .getMany();
+
+      // 3. 오늘의 모든 복용 기록 조회
+      const todayHistories = await this.doseHistoryRepository
+        .createQueryBuilder('dh')
+        .where('dh.group_id = :group_id', { group_id })
+        .andWhere('dh.dose_date = :today', { today })
+        .andWhere('dh.user_id IN (:...memberIds)', { memberIds })
+        .getMany();
+
+      // 4. 약물 목록 조회 (약물명 매핑용)
+      const medicines = await this.medicineRepository
+        .createQueryBuilder('m')
+        .where('m.group_id = :group_id', { group_id })
+        .select(['m.medi_id', 'm.name'])
+        .getMany();
+
+      const medicineMap = new Map(medicines.map(m => [m.medi_id, m.name]));
+
+      // 5. 데이터 가공: 구성원별로 그룹화
+      const result = familyMembers.map(member => {
+        const userId = member.user_user_id;
+        const userName = member.user_name;
+
+        // 해당 구성원의 오늘 스케줄 필터링
+        const memberSchedules = todaySchedules.filter(s => s.user_id === userId);
+        
+        // 약물과 영양제 분리
+        const medicineSchedules: any[] = [];
+        const supplementSchedules: any[] = [];
+
+        memberSchedules.forEach(schedule => {
+          const isSupplement = schedule.medi_id && schedule.medi_id.startsWith('supplement_');
+          const medicineName = medicineMap.get(schedule.medi_id) || schedule.medicine?.name || '알 수 없음';
+          
+          // 해당 스케줄의 복용 기록 찾기
+          const history = todayHistories.find(h => 
+            h.user_id === userId &&
+            h.medi_id === schedule.medi_id &&
+            h.time_of_day === schedule.time_of_day
+          );
+
+          const scheduleData = {
+            medi_id: schedule.medi_id,
+            name: medicineName,
+            time_of_day: schedule.time_of_day,
+            scheduled_dose: schedule.dose,
+            actual_dose: history?.actual_dose,
+            status: history?.status || null,
+            completed_at: history?.completed_at ? history.completed_at.toISOString() : undefined,
+            schedule_created_at: schedule.created_at ? schedule.created_at.toISOString() : undefined
+          };
+
+          if (isSupplement) {
+            supplementSchedules.push(scheduleData);
+          } else {
+            medicineSchedules.push(scheduleData);
+          }
+        });
+
+        return {
+          user_id: userId,
+          name: userName,
+          medicines: medicineSchedules,
+          supplements: supplementSchedules
+        };
+      });
+
+      return {
+        members: result
+      };
+    } catch (error) {
+      console.error('가족 오늘 스케줄 배치 조회 오류:', error);
+      return {
+        members: []
+      };
+    }
   }
 } 

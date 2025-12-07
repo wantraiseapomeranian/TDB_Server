@@ -90,7 +90,6 @@ export class SupplementController {
       slot?: number;
     },
   ) {
-    // console.log('🔥 [Supplement Controller - /add] 영양제 추가 요청:', { memberId, bodyData: Object.keys(data) });
     
     if (!memberId || memberId === 'undefined') {
       throw new BadRequestException('유효하지 않은 memberId입니다.');
@@ -144,7 +143,6 @@ export class SupplementController {
       slot?: number;
     },
   ) {
-    // console.log('🔥 [Supplement Controller] 파라미터 체크:', { memberId, bodyData: Object.keys(data) });
     
     if (!memberId || memberId === 'undefined') {
       throw new BadRequestException('유효하지 않은 memberId입니다.');
@@ -216,7 +214,6 @@ export class SupplementController {
    */
   @Get(':memberId')
   async getSupplementListByMember(@Param('memberId') memberId: string) {
-    // console.log(`🔥 [Supplement Controller] 프론트엔드 호환 영양제 목록 조회: memberId=${memberId}`);
     return this.supplementService.getSupplementList(memberId);
   }
 
@@ -225,7 +222,6 @@ export class SupplementController {
    */
   @Get('user/:userId')
   async getSupplementListByUser(@Param('userId') userId: string) {
-    // console.log(`🔥 [Supplement Controller] 사용자별 영양제 목록 조회: userId=${userId}`);
     return this.supplementService.getSupplementList(userId);
   }
 
@@ -238,7 +234,6 @@ export class SupplementController {
     @Param('mediId') mediId: string,
     @Body() data: { totalQuantity: number },
   ) {
-    // console.log('🔥 [Supplement Controller - /quantity] 영양제 총량 업데이트 요청:', { memberId, mediId, totalQuantity: data.totalQuantity });
     
     if (!memberId || memberId === 'undefined') {
       throw new BadRequestException('유효하지 않은 memberId입니다.');
@@ -260,7 +255,6 @@ export class SupplementController {
    */
   @Get('inventory')
   async getSupplementInventory() {
-    // console.log(`🔥 [Controller] 영양제 재고 조회`);
     
     try {
       // TODO: 실제 재고 조회 로직 구현
@@ -291,7 +285,6 @@ export class SupplementController {
     actualDose?: number;
     notes?: string;
   }) {
-    // console.log(`🔥 [Controller] 영양제 복용 완료 처리:`, body);
     
     try {
       // TODO: 실제 복용 완료 처리 로직 구현

@@ -96,7 +96,7 @@ export class SupplementService {
     });
 
     if (!parentMembership) {
-      throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
+      throw new NotFoundException('보호자 계정을 찾을 수 없습니다.');
     }
 
     // 이미 존재하는 영양제인지 확인
@@ -144,12 +144,9 @@ export class SupplementService {
     );
 
     if (!reserveResult.success) {
-      throw new BadRequestException(reserveResult.error || '슬롯 예약 실패');
-    }
+        throw new BadRequestException(reserveResult.error || '슬롯 예약 실패');
+      }
 
-    // console.log(`🔥 [SupplementService] 영양제 슬롯 할당: ${data.medi_id} → 슬롯 ${slotResult.slot}번 (총량: ${initialTotal})`);
-    // console.log(`🔥 [SupplementService] 시작일: ${startDate}, 종료일: ${endDate}`);
-    // console.log(`🔥 [SupplementService] 총량은 나중에 별도 업데이트에서 설정됩니다.`);
 
     return {
       success: true,
@@ -236,7 +233,6 @@ export class SupplementService {
         throw new BadRequestException(updateResult.error || '슬롯 총량 업데이트 실패');
       }
 
-      // console.log(`🔥 [SupplementService] 영양제 총량 업데이트: ${mediId} → ${totalQuantity}개`);
 
       return {
         success: true,

@@ -34,7 +34,6 @@ export class MachineController {
   @ApiBearerAuth()
   @ApiQuery({ name: 'machine_id', required: true, type: String })
   async checkMachine(@Query('machine_id') machineId: string) {
-    // this.logger.log(`[Device API] 기기 등록 확인 요청: ${machineId}`);
     return this.machineService.checkMachine(machineId);
   }
 
@@ -199,7 +198,6 @@ export class MachineController {
     slot?: number;
   }) {
     // TODO: 에러 정보를 데이터베이스에 저장
-    // console.log('🔥 [Machine] 에러 보고:', body);
     
     return {
       success: true,
@@ -215,7 +213,6 @@ export class MachineController {
     slot?: number;
     timestamp?: string;
   }) {
-    // console.log(`🔥 [MachineController] 하드웨어 에러 신고 (프론트엔드 호환):`, errorData);
     
     // TODO: 실제 하드웨어 에러 처리 로직 구현
     return {
@@ -237,7 +234,6 @@ export class MachineController {
     firmware_version?: string;
     last_maintenance?: string;
   }) {
-    // console.log(`🔥 [MachineController] 기기 상태 업데이트:`, updateData);
     
     // TODO: 실제 기기 업데이트 로직 구현
     return {

@@ -24,8 +24,6 @@ export class QueueService {
   ) { }
 
   async buildForDay(machineId: string, userId: string, day: string): Promise<TimePhase[]> {
-    // this.logger.log(`사용자 ${userId}의 ${day} 요일 배출 대기열 생성 중...`);
-
     const user = await this.userRepository.findOne({ where: { user_id: userId } });
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} not found.`);
@@ -81,7 +79,6 @@ export class QueueService {
           });
         }
       } else {
-        // this.logger.warn(`[QueueService] 스케줄(ID: ${schedule.schedule_id})의 약(${schedule.medi_id})이 기기(${machineId})의 슬롯에 없습니다. 건너뜁니다.`);
       }
     }
 

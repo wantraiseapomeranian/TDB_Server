@@ -32,7 +32,6 @@ export class FamilyController {
    */
   @Get('members')
   async getMembersCompat(@Query('userId') userId?: string, @Query('group_id') group_id?: string) {
-    // console.log(`🔥 [FamilyController] 프론트엔드 호환 구성원 조회: userId=${userId}, group_id=${group_id}`);
     
     if (userId) {
       return this.familyService.getFamilyMembersByUserId(userId);
@@ -88,7 +87,6 @@ export class FamilyController {
       parentUuid?: string; // 기존 호환성을 위해 유지
     },
   ) {
-    // console.log(`🔥 [FamilyController] 프론트엔드 호환 가족 추가:`, data);
     
     // parentUuid를 parentUserId로 변환 (기존 호환성)
     const memberData = {
@@ -134,7 +132,6 @@ export class FamilyController {
    */
   @Post('leave')
   async leaveFamily(@Body() data: { user_id: string; group_id?: string }) {
-    // console.log(`🔥 [FamilyController] 프론트엔드 호환 가족 탈퇴:`, data);
     
     // user_id를 기반으로 삭제
     return this.familyService.deleteFamilyMember(data.user_id);
@@ -145,7 +142,6 @@ export class FamilyController {
    */
   @Get('group-info/:userId')
   async getGroupInfo(@Param('userId') userId: string) {
-    // console.log(`🔥 [FamilyController] 그룹 정보 조회: userId=${userId}`);
     
     try {
       const result = await this.familyService.getFamilyMembersByUserId(userId);
@@ -193,7 +189,6 @@ export class FamilyController {
    */
   @Get('check-machine/:machine_id')
   async checkMachine(@Param('machine_id') machine_id: string) {
-    // console.log(`🔥 [FamilyController] 기기 연동 상태 확인: machine_id=${machine_id}`);
     
     try {
       const result = await this.familyService.checkMachineConnection(machine_id);

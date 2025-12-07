@@ -55,7 +55,6 @@ export class UsersService {
    * 새로운 사용자 생성 (그룹 및 멤버십 포함)
    */
   async createUser(userData: Partial<User>, role: UserRole = UserRole.CHILD, parentUserId?: string): Promise<User> {
-    // console.log('[UsersService] 새 사용자 생성 시작:', userData);
 
     // 1. 사용자 생성
     const newUser = this.usersRepository.create({
@@ -85,7 +84,7 @@ export class UsersService {
     } else {
       // 자녀인 경우 부모의 그룹에 참여
       if (!parentUserId) {
-        throw new BadRequestException('자녀 계정 생성 시 부모 ID가 필요합니다.');
+        throw new BadRequestException('자녀 계정 생성 시 보호자 ID가 필요합니다.');
       }
       
       const parentMembership = await this.membershipRepository.findOne({
@@ -94,7 +93,7 @@ export class UsersService {
       });
       
       if (!parentMembership) {
-        throw new NotFoundException('부모 계정의 그룹을 찾을 수 없습니다.');
+        throw new NotFoundException('보호자 계정의 그룹을 찾을 수 없습니다.');
       }
       
       group = parentMembership.group;
@@ -108,7 +107,6 @@ export class UsersService {
     });
     await this.membershipRepository.save(membership);
 
-    // console.log(`[UsersService] 사용자 생성 완료: ${savedUser.user_id} (${role}) → 그룹: ${group.group_id}`);
     
     return savedUser;
   }
@@ -180,7 +178,7 @@ export class UsersService {
     });
 
     if (!parentMembership) {
-      throw new NotFoundException('부모 계정을 찾을 수 없습니다.');
+      throw new NotFoundException('보호자 계정을 찾을 수 없습니다.');
     }
 
     // 2. 같은 그룹의 자녀들 찾기
@@ -242,7 +240,6 @@ export class UsersService {
 
     const savedMachine = await this.machineRepository.save(newMachine);
 
-    // console.log(`[UsersService] 디스펜서 등록 완료: ${machine_id} → 그룹: ${group.group_id}`);
     
     return {
       message: '디스펜서가 성공적으로 등록되었습니다.',
@@ -272,7 +269,6 @@ export class UsersService {
     user.k_uid = k_uid;
     const updatedUser = await this.usersRepository.save(user);
     
-    // console.log(`[UsersService] 데일리 키트 등록 완료: ${userId} -> ${k_uid}`);
     return updatedUser;
   }
 
@@ -286,7 +282,6 @@ export class UsersService {
       where: { group_id: group.group_id }
     });
 
-    // console.log(`[UsersService] 디스펜서 정보 조회: userId=${userId}, 그룹=${group.group_id}, 기기 수=${machines.length}`);
     
     return {
       machines,
