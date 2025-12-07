@@ -157,6 +157,8 @@ npm run start:prod
 *   `Machine`: 디스펜서 기기 정보 (ID, 그룹 ID, 최대 슬롯 수, 에러 상태)
 *   `MachineSlot`: 디스펜서 슬롯 정보 (슬롯 번호, 약물 ID, 총량, 잔여량)
 *   `Notification`: 사용자 알림 정보
+*   `MedicineMaster`: 외부 API 연동을 위한 약물 마스터 데이터
+*   `TabletMaster`: 외부 API 연동을 위한 정제 마스터 데이터
 
 ## 🐳 도커 (Docker)
 
