@@ -65,9 +65,11 @@ export class DispenseService {
   ) {}
 
   async reportDispense(report: DispenseReportDto) {
+    this.logger.log(`배출 결과 처리 중: user ${report.user_id}, result: ${report.result}`);
 
     // 'failed' 상태에서는 재고 및 사용자 상태 변경 없이 기록만 함
     if (report.result === 'failed') {
+      this.logger.warn(`배출 실패 보고: user ${report.user_id}. 복용 기록만 저장합니다.`);
       // 여기서 DoseHistory만 저장하는 로직을 추가할 수 있으나, 현재는 아래 트랜잭션 로직에서 처리되도록 둠.
       // 'failed' 시에는 재고 차감, took_today 업데이트가 모두 스킵됨.
     }
@@ -94,15 +96,24 @@ export class DispenseService {
           });
 
           if (!slot) {
+            this.logger.error(`슬롯을 찾을 수 없음: machine=${report.machine_id}, slot=${item.slot}. 트랜잭션을 롤백합니다.`);
             throw new InternalServerErrorException(`슬롯 정보를 찾을 수 없습니다: ${item.slot}`);
           }
 
           if (slot.remain < item.count) {
+            this.logger.warn(
+                `재고 부족 경고: machine=${report.machine_id}, slot=${item.slot}, ` +
+                `remain=${slot.remain}, requested=${item.count}. 재고는 0으로 차감됩니다.`
+            );
           }
           
           slot.remain = Math.max(0, slot.remain - item.count);
           await transactionalEntityManager.save(MachineSlot, slot);
 
+          this.logger.log(
+            `재고 차감 완료: machine=${report.machine_id}, slot=${item.slot}, ` +
+            `medi_id=${item.medi_id}, count=${item.count}, new_remain=${slot.remain}`
+          );
         }
       }
 
@@ -113,50 +124,32 @@ export class DispenseService {
         // 🔥 각 약물별 actualDose 계산 (전체 합계가 아닌 개별 약물의 count 사용)
         const itemActualDose = (report.result === 'completed' || report.result === 'partial') ? item.count : 0;
         
-        // 🔥 기존 기록이 있는지 확인 (중복 방지)
-        const existingHistory = await transactionalEntityManager
-          .createQueryBuilder(DoseHistory, 'dh')
-          .where('dh.user_id = :user_id', { user_id: report.user_id })
-          .andWhere('dh.medi_id = :medi_id', { medi_id: item.medi_id })
-          .andWhere('dh.time_of_day = :time_of_day', { time_of_day: report.time })
-          .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
-          .getOne();
-
-        if (existingHistory) {
-          // 기존 기록이 있으면 업데이트 (수동 체크로 덮어쓰기 방지)
-          existingHistory.actual_dose = itemActualDose; // 🔥 각 약물별 count 사용
-          existingHistory.status = report.result as DoseStatus;
-          existingHistory.completed_at = new Date();
-          // 기존 notes에 배출 정보 추가
-          const existingNotes = existingHistory.notes || '';
-          existingHistory.notes = existingNotes 
-            ? `${existingNotes} | Machine: ${report.machine_id}` 
-            : `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`;
-          await transactionalEntityManager.save(DoseHistory, existingHistory);
-        } else {
-          // 새 기록 생성
-          const historyEntry = transactionalEntityManager.create(DoseHistory, {
+        // 🔥 배출 완료 레코드 생성 (체크 버튼 레코드와 별도로 저장)
+        // 🔥 배출 완료 레코드는 항상 새로 생성 (체크 버튼 레코드와 분리)
+        const dispenseHistory = transactionalEntityManager.create(DoseHistory, {
           group_id: membership.group_id,
           user_id: report.user_id,
-            medi_id: item.medi_id,
+          medi_id: item.medi_id,
           time_of_day: report.time,
-            dose_date: new Date(todayString),
-            scheduled_dose: item.count,
-            actual_dose: itemActualDose, // 🔥 각 약물별 count 사용
+          dose_date: new Date(todayString),
+          scheduled_dose: item.count,
+          actual_dose: itemActualDose, // 🔥 각 약물별 count 사용
           status: report.result as DoseStatus,
           completed_at: new Date(),
-          notes: `Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`
-      });
-      await transactionalEntityManager.save(DoseHistory, historyEntry);
-        }
+          notes: `[배출완료] Machine: ${report.machine_id}, ClientTx: ${report.client_tx_id || 'N/A'}`
+        });
+        await transactionalEntityManager.save(DoseHistory, dispenseHistory);
+        this.logger.log(`배출 완료 레코드 생성: user=${report.user_id}, medi_id=${item.medi_id}, time=${report.time}, actual_dose=${itemActualDose} (체크 버튼 레코드와 별도)`);
       }
       
+      this.logger.log(`복용 기록 처리 완료: user ${report.user_id}, items=${report.items.length}개`);
 
       let tookToday = user.took_today;
       if (report.result === 'completed') {
           user.took_today = 1;
           await transactionalEntityManager.save(User, user);
           tookToday = 1;
+          this.logger.log(`사용자 ${report.user_id}의 took_today 상태를 1로 업데이트했습니다 (time: ${report.time})`);
       }
 
       return {

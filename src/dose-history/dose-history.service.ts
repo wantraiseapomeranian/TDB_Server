@@ -63,46 +63,43 @@ export class DoseHistoryService {
       // 사용자의 그룹 정보 조회
       const { group_id } = await this.getUserGroup(user_id);
 
-      // 🔥 기존 기록이 있는지 확인 (DATE 함수로 날짜 부분만 비교)
-      let doseHistory = await this.doseHistoryRepository
+      // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
+      // notes에 "[배출완료]"가 포함된 레코드는 제외
+      // 오늘 날짜의 기록만 조회 (이전 날짜 기록은 무시)
+      let checkHistory = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.user_id = :user_id', { user_id })
         .andWhere('dh.medi_id = :medi_id', { medi_id })
         .andWhere('dh.time_of_day = :time_of_day', { time_of_day })
         .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
         .getOne();
 
-      if (doseHistory) {
-        // 🔥 기존 기록이 있고, 아두이노 배출로 생성된 기록이면 업데이트하지 않음
-        const isMachineDispense = doseHistory.notes && doseHistory.notes.includes('Machine:');
-        if (isMachineDispense) {
-          // 아두이노 배출 기록이 이미 있으면 그대로 반환 (업데이트 안 함)
-          return doseHistory;
-        }
-        
-        // 기존 기록 업데이트 (수동 체크 또는 다른 방식으로 생성된 기록인 경우)
-        doseHistory.actual_dose = actual_dose;
-        doseHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
-        doseHistory.completed_at = new Date();
-        if (notes) doseHistory.notes = notes;
+      if (checkHistory) {
+        // 🔥 기존 체크 버튼 레코드가 있으면 업데이트
+        checkHistory.actual_dose = actual_dose;
+        checkHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
+        checkHistory.completed_at = new Date();
+        if (notes) checkHistory.notes = notes;
+        return await this.doseHistoryRepository.save(checkHistory);
       } else {
-        // 새 기록 생성
-        doseHistory = new DoseHistory();
-        doseHistory.history_id = uuidv4();
-        doseHistory.group_id = group_id;
-        doseHistory.user_id = user_id;
-        doseHistory.medi_id = medi_id;
-        doseHistory.time_of_day = time_of_day;
-        doseHistory.dose_date = todayDate;
-        doseHistory.scheduled_dose = actual_dose; // 임시로 같은 값 사용
-        doseHistory.actual_dose = actual_dose;
-        doseHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
-        doseHistory.completed_at = new Date();
-        if (notes) doseHistory.notes = notes;
+        // 🔥 새 체크 버튼 레코드 생성 (배출 완료 레코드와 별도)
+        const newCheckHistory = new DoseHistory();
+        newCheckHistory.history_id = uuidv4();
+        newCheckHistory.group_id = group_id;
+        newCheckHistory.user_id = user_id;
+        newCheckHistory.medi_id = medi_id;
+        newCheckHistory.time_of_day = time_of_day;
+        newCheckHistory.dose_date = todayDate;
+        newCheckHistory.scheduled_dose = actual_dose; // 임시로 같은 값 사용
+        newCheckHistory.actual_dose = actual_dose;
+        newCheckHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
+        newCheckHistory.completed_at = new Date();
+        if (notes) newCheckHistory.notes = notes;
+        return await this.doseHistoryRepository.save(newCheckHistory);
       }
-
-      return await this.doseHistoryRepository.save(doseHistory);
     } catch (error) {
+      console.error('복용 완료 처리 오류:', error);
       throw new Error('복용 기록 저장에 실패했습니다.');
     }
   }
@@ -134,6 +131,7 @@ export class DoseHistoryService {
         .addOrderBy('dh.time_of_day', 'ASC')
         .getMany();
     } catch (error) {
+      console.error('복용 기록 조회 오류:', error);
       return [];
     }
   }
@@ -169,6 +167,7 @@ export class DoseHistoryService {
         daily_stats: [], // 간단한 버전에서는 빈 배열   
       };
     } catch (error) {
+      console.error('주간 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -193,14 +192,19 @@ export class DoseHistoryService {
         .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek })
         .getMany();
 
+      console.log(`🔍 [getTodayProgress] ${user_id}의 오늘(${dayOfWeek}) 스케줄:`, todaySchedules.length);
 
-      // 🔥 2. 오늘의 복용 기록 조회 (DoseHistory 테이블)
+      // 🔥 2. 오늘의 복용 기록 조회 (DoseHistory 테이블, 24시간 기준 초기화)
+      // 🔥 DATE 함수를 사용하여 날짜 부분만 비교 (시간 무시)
+      // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.user_id = :user_id', { user_id })
-        .andWhere('dh.dose_date = :today', { today })
+        .andWhere('DATE(dh.dose_date) = :today', { today })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
         .getMany();
 
+      console.log(`🔍 [getTodayProgress] ${user_id}의 복용 기록:`, todayHistories.length);
 
       // 🔥 3. 스케줄과 복용 기록 병합 (실제 기록만 인정)
             const now = new Date();
@@ -221,7 +225,18 @@ export class DoseHistoryService {
 
           // 🔥 히스토리가 있으면 그 status 사용, 없으면 null (프론트에서 처리)
           // 시간이 지났다고 자동으로 'missed'로 판단하지 않음!
-          const status: DoseStatus | null = history?.status || null;
+          let status: DoseStatus | null = history?.status || null;
+          
+          // 🔥 새로운 스케줄이 등록된 경우: 스케줄 생성 시간이 완료 시간보다 나중이면 완료 상태 무시
+          if (status === DoseStatus.COMPLETED && schedule.created_at && history?.completed_at) {
+            const scheduleCreatedDate = new Date(schedule.created_at);
+            const completedDate = new Date(history.completed_at);
+            
+            // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면, 새로운 스케줄이므로 완료 상태 무시
+            if (scheduleCreatedDate > completedDate) {
+              status = null; // 새로운 스케줄이므로 복용 완료 필요
+            }
+          }
 
           return {
             medi_id: schedule.medi_id,
@@ -237,6 +252,7 @@ export class DoseHistoryService {
         .filter(schedule => {
           // 🔥 약 이름이 없는 항목은 제외
           if (!schedule.medi_name || schedule.medi_name === '약 이름 없음') {
+            console.log(`⚠️ [getTodayProgress] 약 이름 없는 스케줄 제외: medi_id=${schedule.medi_id}`);
             return false;
           }
           
@@ -270,6 +286,7 @@ export class DoseHistoryService {
         completion_rate,
       };
     } catch (error) {
+      console.error('오늘 진행률 조회 오류:', error);
       return {
         user_id,
         user_name: null,
@@ -300,6 +317,7 @@ export class DoseHistoryService {
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
         .andWhere('dh.dose_date = :today', { today })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
         .getMany();
 
       const total_completed = histories.filter(h => h.status === DoseStatus.COMPLETED).length;
@@ -314,6 +332,7 @@ export class DoseHistoryService {
         member_count: 0, // 간단한 버전
       };
     } catch (error) {
+      console.error('가족 통계 조회 오류:', error);
       return {
         total_scheduled: 0,
         total_completed: 0,
@@ -343,6 +362,7 @@ export class DoseHistoryService {
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
         .andWhere('dh.dose_date = :today', { today })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
         .getMany();
 
       // 🔥 오늘 요일의 스케줄만 조회 (수정됨!)
@@ -353,6 +373,7 @@ export class DoseHistoryService {
         .select(['s.user_id', 's.medi_id', 's.time_of_day', 's.dose'])
         .getMany();
       
+      console.log(`🔍 [getDetailedFamilyStats] 오늘(${dayOfWeek}) 스케줄: ${scheduledDoses.length}개`);
 
       // 시간대별 분석
       const timeSlots = {
@@ -436,6 +457,7 @@ export class DoseHistoryService {
         lastUpdated: new Date().toISOString()
       };
     } catch (error) {
+      console.error('상세 가족 통계 조회 오류:', error);
       return {
         summary: {
           total_scheduled: 0,
@@ -456,36 +478,100 @@ export class DoseHistoryService {
   async getTodayCompletionStatus(user_id: string, medi_id?: string, date?: string) {
     try {
       const targetDate = date || new Date().toISOString().split('T')[0];
+      const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date(targetDate).getDay()];
       
+      // 🔥 DATE 함수를 사용하여 날짜 부분만 비교 (24시간 기준 초기화)
+      // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       const queryBuilder = this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.user_id = :user_id', { user_id })
-        .andWhere('dh.dose_date = :date', { date: targetDate });
+        .andWhere('DATE(dh.dose_date) = :date', { date: targetDate })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' });
 
       if (medi_id) {
         queryBuilder.andWhere('dh.medi_id = :medi_id', { medi_id });
       }
 
       const histories = await queryBuilder.getMany();
+      
+      // 🔥 스케줄 정보 조회 (새로운 스케줄 등록 확인용)
+      const scheduleQueryBuilder = this.scheduleRepository
+        .createQueryBuilder('schedule')
+        .where('schedule.user_id = :user_id', { user_id })
+        .andWhere('schedule.day_of_week = :dayOfWeek', { dayOfWeek });
+      
+      if (medi_id) {
+        scheduleQueryBuilder.andWhere('schedule.medi_id = :medi_id', { medi_id });
+      }
+      
+      const schedules = await scheduleQueryBuilder.getMany();
 
       if (medi_id) {
-        // 특정 약물의 시간대별 완료 상태
-        const status = {
-          morning: histories.some(h => h.time_of_day === 'morning' && h.status === DoseStatus.COMPLETED),
-          afternoon: histories.some(h => h.time_of_day === 'afternoon' && h.status === DoseStatus.COMPLETED),
-          evening: histories.some(h => h.time_of_day === 'evening' && h.status === DoseStatus.COMPLETED)
+        // 특정 약물의 시간대별 완료 상태 (오늘 날짜만 조회)
+        // 🔥 새로운 스케줄이 등록된 경우 완료 상태 무시
+        const getStatusForTimeSlot = (timeOfDay: 'morning' | 'afternoon' | 'evening') => {
+          const history = histories.find(h => h.time_of_day === timeOfDay && h.status === DoseStatus.COMPLETED);
+          if (!history) return false;
+          
+          // 🔥 해당 시간대의 스케줄 찾기
+          const schedule = schedules.find(s => s.time_of_day === timeOfDay);
+          if (!schedule) return false;
+          
+          // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 완료 상태 무시
+          if (schedule.created_at && history.completed_at) {
+            const scheduleCreatedDate = new Date(schedule.created_at);
+            const completedDate = new Date(history.completed_at);
+            
+            if (scheduleCreatedDate > completedDate) {
+              return false; // 새로운 스케줄이므로 복용 완료 필요
+            }
+          }
+          
+          return true;
         };
         
+        const status = {
+          morning: getStatusForTimeSlot('morning'),
+          afternoon: getStatusForTimeSlot('afternoon'),
+          evening: getStatusForTimeSlot('evening')
+        };
+        
+        // 🔥 클라이언트 호환성을 위해 직접 status 반환 (completion_status 래핑 제거)
         return {
           medi_id,
           date: targetDate,
-          completion_status: status
+          morning: status.morning,
+          afternoon: status.afternoon,
+          evening: status.evening
         };
       } else {
-        // 모든 약물의 시간대별 완료 상태 (약물별로 그룹화)
+        // 모든 약물의 시간대별 완료 상태 (약물별로 그룹화, 오늘 날짜만)
         const statusByMedicine: Record<string, any> = {};
         
+        // 🔥 약물별로 초기화
+        schedules.forEach(schedule => {
+          if (!statusByMedicine[schedule.medi_id]) {
+            statusByMedicine[schedule.medi_id] = {
+              medi_id: schedule.medi_id,
+              morning: false,
+              afternoon: false,
+              evening: false
+            };
+          }
+        });
+        
+        // 🔥 오늘 날짜의 기록만 처리 (24시간 기준 초기화)
         histories.forEach(history => {
+          // 🔥 날짜 확인 (이중 체크)
+          const historyDate = history.dose_date instanceof Date 
+            ? history.dose_date.toISOString().split('T')[0]
+            : history.dose_date;
+          
+          // 🔥 오늘 날짜가 아니면 무시 (24시간 기준 초기화)
+          if (historyDate !== targetDate) {
+            return;
+          }
+          
           if (!statusByMedicine[history.medi_id]) {
             statusByMedicine[history.medi_id] = {
               medi_id: history.medi_id,
@@ -495,6 +581,23 @@ export class DoseHistoryService {
             };
           }
           
+          // 🔥 새로운 스케줄이 등록된 경우 완료 상태 무시
+          const schedule = schedules.find(s => 
+            s.medi_id === history.medi_id && 
+            s.time_of_day === history.time_of_day
+          );
+          
+          if (schedule && schedule.created_at && history.completed_at) {
+            const scheduleCreatedDate = new Date(schedule.created_at);
+            const completedDate = new Date(history.completed_at);
+            
+            // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 완료 상태 무시
+            if (scheduleCreatedDate > completedDate) {
+              return; // 새로운 스케줄이므로 복용 완료 필요 (false 유지)
+            }
+          }
+          
+          // 🔥 COMPLETED 상태만 완료로 표시
           if (history.status === DoseStatus.COMPLETED) {
             statusByMedicine[history.medi_id][history.time_of_day] = true;
           }
@@ -503,10 +606,13 @@ export class DoseHistoryService {
         return Object.values(statusByMedicine);
       }
     } catch (error) {
+      console.error('오늘 복용 완료 상태 조회 오류:', error);
       return medi_id ? { 
         medi_id, 
         date: date || new Date().toISOString().split('T')[0],
-        completion_status: { morning: false, afternoon: false, evening: false }
+        morning: false,
+        afternoon: false,
+        evening: false
       } : [];
     }
   }
@@ -570,12 +676,15 @@ export class DoseHistoryService {
         ])
         .getMany();
 
-      // 3. 오늘의 모든 복용 기록 조회
+      // 3. 오늘의 모든 복용 기록 조회 (24시간 기준 초기화)
+      // 🔥 DATE 함수를 사용하여 날짜 부분만 비교 (시간 무시)
+      // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
-        .andWhere('dh.dose_date = :today', { today })
+        .andWhere('DATE(dh.dose_date) = :today', { today })
         .andWhere('dh.user_id IN (:...memberIds)', { memberIds })
+        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
         .getMany();
 
       // 4. 약물 목록 조회 (약물명 매핑용)
@@ -603,12 +712,22 @@ export class DoseHistoryService {
           const isSupplement = schedule.medi_id && schedule.medi_id.startsWith('supplement_');
           const medicineName = medicineMap.get(schedule.medi_id) || schedule.medicine?.name || '알 수 없음';
           
-          // 해당 스케줄의 복용 기록 찾기
-          const history = todayHistories.find(h => 
-            h.user_id === userId &&
+          // 해당 스케줄의 복용 기록 찾기 (오늘 날짜만, 24시간 기준 초기화)
+          const history = todayHistories.find(h => {
+            // 🔥 날짜 확인 (이중 체크)
+            const historyDate = h.dose_date instanceof Date 
+              ? h.dose_date.toISOString().split('T')[0]
+              : h.dose_date;
+            
+            // 🔥 오늘 날짜가 아니면 무시
+            if (historyDate !== today) {
+              return false;
+            }
+            
+            return h.user_id === userId &&
             h.medi_id === schedule.medi_id &&
-            h.time_of_day === schedule.time_of_day
-          );
+                   h.time_of_day === schedule.time_of_day;
+          });
 
           const scheduleData = {
             medi_id: schedule.medi_id,
@@ -640,6 +759,7 @@ export class DoseHistoryService {
         members: result
       };
     } catch (error) {
+      console.error('가족 오늘 스케줄 배치 조회 오류:', error);
       return {
         members: []
       };

@@ -51,6 +51,8 @@ export class DispenserService {
    */
   async rfidAutoDispense(k_uid: string, machine_id: string) {
     try {
+      console.log(`🔥 [DispenserService] RFID 자동배출 시작: k_uid=${k_uid}, machine_id=${machine_id}`);
+
       // 1. 사용자 확인
       const user = await this.userRepository.findOne({
         where: { k_uid },
@@ -59,6 +61,8 @@ export class DispenserService {
       if (!user) {
         throw new NotFoundException(`RFID UID(${k_uid})에 해당하는 사용자를 찾을 수 없습니다.`);
       }
+
+      console.log(`✅ 사용자 확인: ${user.name} (${user.user_id})`);
 
       // 2. 기기 확인
       const machine = await this.machineRepository.findOne({
@@ -74,6 +78,8 @@ export class DispenserService {
       const today = new Date();
       const todayStr = today.toISOString().split('T')[0];
       const currentDayOfWeek = this.getCurrentDayOfWeek();
+
+      console.log(`🕐 현재 시간대: ${currentTimeOfDay}, 요일: ${currentDayOfWeek}`);
 
       // 4. 오늘의 스케줄에서 현재 시간대에 맞는 약 조회
       const schedules = await this.scheduleRepository
@@ -99,6 +105,8 @@ export class DispenserService {
           message: '복용할 약이 없습니다.',
         };
       }
+
+      console.log(`📋 ${currentTimeOfDay} 시간대 스케줄: ${schedules.length}개의 약`);
 
       // 5. 이미 복용했는지 확인
       const alreadyTaken = await this.doseHistoryRepository.findOne({
@@ -143,6 +151,7 @@ export class DispenserService {
           }
 
           // 약물 배출 명령 전송
+          console.log(`💊 배출 시작: ${schedule.medicine?.name} (슬롯 ${slot.slot_number}, ${schedule.dose}개)`);
           
           const dispenseResult = await this.sendDispenseCommand(
             machine_id,
@@ -175,6 +184,7 @@ export class DispenserService {
                 ? `${existingNotes} | RFID 자동배출 (${k_uid})` 
                 : `RFID 자동배출 (${k_uid})`;
               await this.doseHistoryRepository.save(existingHistory);
+              console.log(`✅ 기존 복용 기록 업데이트: ${schedule.medicine?.name}`);
             } else {
               // 새 기록 생성
             const doseHistory = this.doseHistoryRepository.create({
@@ -190,6 +200,7 @@ export class DispenserService {
               notes: `RFID 자동배출 (${k_uid})`,
             });
             await this.doseHistoryRepository.save(doseHistory);
+              console.log(`✅ 새 복용 기록 생성: ${schedule.medicine?.name}`);
             }
 
             dispensedMedicines.push({
@@ -199,6 +210,7 @@ export class DispenserService {
               remaining: slot.remain,
             });
 
+            console.log(`✅ 배출 완료: ${schedule.medicine?.name} (${schedule.dose}개)`);
           } else {
             errors.push(`${schedule.medicine?.name || schedule.medi_id}: ${dispenseResult.error}`);
           }
@@ -248,6 +260,8 @@ export class DispenserService {
     reason?: string;
   }) {
     try {
+      console.log(`🔥 [DispenserService] 스케줄 기반 자동배출 시작:`, data);
+
       // 1. 기기 정보 조회
       const machine = await this.machineRepository.findOne({
         where: { machine_id: data.machine_id },
@@ -282,45 +296,27 @@ export class DispenserService {
         slot.remain -= data.quantity;
         await this.machineSlotRepository.save(slot);
 
-        // 🔥 기존 복용 기록 확인 (중복 방지)
+        // 🔥 배출 완료 레코드 생성 (체크 버튼 레코드와 별도로 저장)
         const todayString = new Date().toISOString().split('T')[0];
         const currentTimeOfDay = this.getCurrentTimeOfDay();
         
-        const existingHistory = await this.doseHistoryRepository
-          .createQueryBuilder('dh')
-          .where('dh.user_id = :user_id', { user_id: data.userId })
-          .andWhere('dh.medi_id = :medi_id', { medi_id: data.medicineId })
-          .andWhere('dh.time_of_day = :time_of_day', { time_of_day: currentTimeOfDay })
-          .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
-          .getOne();
-
-        if (existingHistory) {
-          // 기존 기록이 있으면 업데이트
-          existingHistory.actual_dose = data.quantity;
-          existingHistory.status = DoseStatus.COMPLETED;
-          existingHistory.completed_at = new Date();
-          // 기존 notes에 스케줄 배출 정보 추가
-          const existingNotes = existingHistory.notes || '';
-          existingHistory.notes = existingNotes 
-            ? `${existingNotes} | 스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}` 
-            : `스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`;
-          await this.doseHistoryRepository.save(existingHistory);
-        } else {
-          // 새 기록 생성
-        const doseHistory = this.doseHistoryRepository.create({
+        // 🔥 배출 완료 레코드는 항상 새로 생성 (체크 버튼 레코드와 분리)
+        const dispenseHistory = this.doseHistoryRepository.create({
           group_id: machine.group_id,
           user_id: data.userId,
           medi_id: data.medicineId,
-            time_of_day: currentTimeOfDay,
-            dose_date: new Date(todayString),
+          time_of_day: currentTimeOfDay,
+          dose_date: new Date(todayString),
           scheduled_dose: data.quantity,
           actual_dose: data.quantity,
           status: DoseStatus.COMPLETED,
           completed_at: new Date(),
-          notes: `스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`,
+          notes: `[배출완료] 스케줄 기반 자동배출: ${data.reason || 'RFID 인식'}`,
         });
-        await this.doseHistoryRepository.save(doseHistory);
-        }
+        await this.doseHistoryRepository.save(dispenseHistory);
+        console.log(`✅ 배출 완료 레코드 생성: ${data.medicineId} (체크 버튼 레코드와 별도)`);
+
+        console.log(`🔥 [DispenserService] 스케줄 기반 자동배출 완료: ${data.quantity}개 배출`);
 
         return {
           success: true,
@@ -373,6 +369,8 @@ export class DispenserService {
         warning: slot.remain <= 5,
       }));
 
+      console.log(`🔥 [DispenserService] 기기 상태 조회: ${machine_id} - ${slots.length}개 슬롯`);
+
       return {
         success: true,
         data: {
@@ -408,6 +406,7 @@ export class DispenserService {
       });
 
       if (user) {
+        console.log(`🔥 [DispenserService] 사용자 UID 확인: ${uid} - ${user.name}`);
         
         return {
           success: true,
@@ -428,6 +427,7 @@ export class DispenserService {
       });
 
       if (machine) {
+        console.log(`🔥 [DispenserService] 기기 UID 확인: ${uid}`);
         
         return {
           success: true,
@@ -504,6 +504,7 @@ export class DispenserService {
         };
       }));
 
+      console.log(`🔥 [DispenserService] 오늘의 디스펜스 목록 조회: ${dispenseList.length}개`);
 
       return {
         success: true,
@@ -551,6 +552,7 @@ export class DispenserService {
         empty: slot.remain === 0,
       }));
 
+      console.log(`🔥 [DispenserService] 슬롯 상태 조회: ${slots.length}개 슬롯`);
 
       return {
         success: true,
@@ -618,8 +620,12 @@ export class DispenserService {
       const slotNumbers = slots.map(slot => slot.slot_number);
       const duplicateSlots = slotNumbers.filter((slot, index) => slotNumbers.indexOf(slot) !== index);
       
+      console.log(`🔥 [DispenserService] 슬롯 디버깅: ${machine_id}`);
+      console.log(`🔥 총 슬롯 수: ${slots.length}개`);
+      console.log(`🔥 중복 슬롯: ${duplicateSlots.length > 0 ? duplicateSlots.join(', ') : '없음'}`);
       
       detailedSlots.forEach((slot, idx) => {
+        console.log(`🔥 슬롯 ${idx + 1}: ${slot.slot_number}번 - ${slot.item_type} - ${slot.medicine_name} (${slot.medi_id})`);
       });
 
       return {
@@ -653,6 +659,7 @@ export class DispenserService {
   // 🔥 전체 데이터베이스 상태 디버깅
   async debugDatabaseState(machine_id: string) {
     try {
+      console.log(`🔍 [DispenserService] 데이터베이스 상태 디버깅: ${machine_id}`);
 
       // 1. Machine 정보 조회
       const machine = await this.machineRepository.findOne({
@@ -679,12 +686,22 @@ export class DispenserService {
       const orphanMedicines = medicineIds.filter(id => !slotMedicineIds.includes(id));
       const orphanSlots = slotMedicineIds.filter(id => !medicineIds.includes(id));
 
+      console.log(`🔥 [데이터베이스 분석]`);
+      console.log(`  Machine: ${machine_id} (그룹: ${machine?.group_id})`);
+      console.log(`  Medicine 테이블: ${medicines.length}개`);
+      console.log(`  machine_slot 테이블: ${slots.length}개`);
+      console.log(`  고아 Medicine (슬롯 없음): ${orphanMedicines.length}개 - [${orphanMedicines.join(', ')}]`);
+      console.log(`  고아 슬롯 (Medicine 없음): ${orphanSlots.length}개 - [${orphanSlots.join(', ')}]`);
 
       // 6. 상세 정보 출력
+      console.log(`\n🔥 [Medicine 테이블 상세]`);
       medicines.forEach((med, idx) => {
+        console.log(`  ${idx + 1}. ${med.medi_id} - ${med.name} (그룹: ${med.group_id})`);
       });
 
+      console.log(`\n🔥 [machine_slot 테이블 상세]`);
       slots.forEach((slot, idx) => {
+        console.log(`  ${idx + 1}. 슬롯 ${slot.slot_number}: ${slot.medi_id} (${slot.total}/${slot.remain})`);
       });
 
       return {
@@ -737,6 +754,7 @@ export class DispenserService {
   private async sendDispenseCommand(machine_id: string, slot: number, quantity: number): Promise<{success: boolean, error?: string}> {
     try {
       // TODO: 실제 라즈베리파이 통신 구현
+      console.log(`🔥 [DispenserService] 라즈베리파이로 디스펜스 명령 전송: ${machine_id} - 슬롯 ${slot}, 수량 ${quantity}`);
       
       // 임시로 성공 반환 (실제로는 HTTP/TCP 통신)
       await new Promise(resolve => setTimeout(resolve, 100)); // 통신 지연 시뮬레이션
