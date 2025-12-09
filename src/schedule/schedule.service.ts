@@ -81,6 +81,7 @@ export class ScheduleService {
     requestUserId?: string
   ) {
     try {
+      console.log(`🔥 [ScheduleService] 매트릭스 스케줄 저장 시작: ${medicineId}/${memberId}`);
 
       // 1. 사용자 그룹 정보 조회
       const { user, group, membership } = await this.getUserGroup(memberId);
@@ -92,6 +93,9 @@ export class ScheduleService {
           where: { user_id: requestUserId },
           relations: ['user']
         });
+      } else if (requestUserId === memberId) {
+        // 요청자가 본인인 경우 membership 사용
+        requestMembership = membership;
       }
 
       // 3. 약물 정보 조회 (그룹 기반)
@@ -103,7 +107,21 @@ export class ScheduleService {
         throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
       }
 
-      // 🔥 4. 나이 유효성 검사 (연령별 복용 가능 여부 확인)
+      // 🔥 4. 스케줄 저장 권한 확인 (자녀 계정의 경우)
+      if (requestMembership && requestMembership.role === UserRole.CHILD) {
+        // 자녀 계정인 경우 권한 확인
+        const isCommonMedicine = !medicine.target_users || medicine.target_users.length === 0;
+        const isOwnMedicine = medicine.target_users && medicine.target_users.includes(memberId);
+        
+        // 가족 공통 약물이 아니고 본인 약물도 아닌 경우 차단
+        if (!isCommonMedicine && !isOwnMedicine) {
+          throw new ForbiddenException('이 약물의 스케줄을 등록할 권한이 없습니다.');
+        }
+        
+        console.log(`✅ [ScheduleService] 자녀 계정 권한 확인 통과: 가족 공통=${isCommonMedicine}, 본인 약물=${isOwnMedicine}`);
+      }
+
+      // 🔥 5. 나이 유효성 검사 (연령별 복용 가능 여부 확인)
       const validationResult = await this.validateUserAge(memberId, medicineId);
       if (!validationResult.allowed) {
         throw new BadRequestException({
@@ -121,6 +139,13 @@ export class ScheduleService {
           group_id: group.group_id
         }
       });
+
+      // 🔥 4-1. 기존 스케줄의 오늘 요일 시간대 목록 저장 (기록 삭제용)
+      const today = new Date().toISOString().split('T')[0];
+      const currentDayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+      const oldTimeSlotsForToday = oldSchedules
+        .filter(s => s.day_of_week === currentDayOfWeek)
+        .map(s => s.time_of_day);
 
       // 5. 기존 스케줄 삭제
       await this.scheduleRepo.delete({
@@ -146,31 +171,43 @@ export class ScheduleService {
         });
 
       const savedSchedules = await this.scheduleRepo.save(newSchedules);
+      console.log(`🔥 [ScheduleService] ${savedSchedules.length}개 스케줄 저장 완료`);
 
       // 🔥 7. 오늘 날짜의 불필요한 복용 기록 정리
-      // 새 스케줄에서 제거된 시간대의 복용 기록을 삭제
-      const today = new Date().toISOString().split('T')[0];
-      const currentDayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
-      
-      // 기존 스케줄 중 오늘 요일의 시간대 목록
-      const oldTimeSlotsForToday = oldSchedules
-        .filter(s => s.day_of_week === currentDayOfWeek)
-        .map(s => s.time_of_day);
+      // 🔥 제안 1: 스케줄 재등록 시 해당 시간대 기록 삭제
+      // - 제거된 시간대의 기록 삭제
+      // - 재등록된 시간대의 기록 삭제 (스케줄이 재등록되면 완료/놓침 상태 초기화)
       
       // 새 스케줄 중 오늘 요일의 시간대 목록
       const newTimeSlotsForToday = savedSchedules
         .filter(s => s.day_of_week === currentDayOfWeek)
         .map(s => s.time_of_day);
       
-      // 제거된 시간대 파악 (기존에는 있었지만 새로 저장된 스케줄에는 없는 시간대)
+      // 🔥 제거된 시간대 파악 (기존에는 있었지만 새로 저장된 스케줄에는 없는 시간대)
       const removedTimeSlots = oldTimeSlotsForToday.filter(
         timeSlot => !newTimeSlotsForToday.includes(timeSlot)
       );
       
-      // 제거된 시간대의 오늘 복용 기록 삭제
-      if (removedTimeSlots.length > 0) {
+      // 🔥 재등록된 시간대 파악 (기존에도 있었고 새로도 있는 시간대 = 스케줄 재등록)
+      const reRegisteredTimeSlots = oldTimeSlotsForToday.filter(
+        timeSlot => newTimeSlotsForToday.includes(timeSlot)
+      );
+      
+      // 🔥 삭제할 시간대 목록 (제거된 시간대 + 재등록된 시간대)
+      const timeSlotsToDelete = [...removedTimeSlots, ...reRegisteredTimeSlots];
+      
+      // 🔥 해당 시간대의 오늘 복용 기록 삭제
+      if (timeSlotsToDelete.length > 0) {
+        console.log(`🔥 [ScheduleService] 오늘(${currentDayOfWeek}) 복용 기록 삭제:`, {
+          medicineId,
+          memberId,
+          today,
+          removedTimeSlots,
+          reRegisteredTimeSlots,
+          totalTimeSlotsToDelete: timeSlotsToDelete.length
+        });
         
-        for (const timeSlot of removedTimeSlots) {
+        for (const timeSlot of timeSlotsToDelete) {
           await this.doseHistoryRepo.delete({
             medi_id: medicineId,
             user_id: memberId,
@@ -179,6 +216,7 @@ export class ScheduleService {
           });
         }
         
+        console.log(`✅ [ScheduleService] ${timeSlotsToDelete.length}개 시간대의 복용 기록 삭제 완료`);
       }
 
       // 6. MachineSlot 업데이트 (totalQuantity가 있는 경우)
@@ -214,11 +252,13 @@ export class ScheduleService {
     }
 
     if (parsedQuantity <= 0) {
+      console.log(`[ScheduleService] totalQuantity가 유효하지 않음: ${totalQuantity}`);
       return;
     }
 
     // 권한 확인 (부모만 수량 업데이트 가능)
     if (requestMembership && requestMembership.role !== UserRole.PARENT) {
+      console.log(`[ScheduleService] 권한 없음: ${requestMembership.role} (보호자만 수량 설정 가능)`);
       return;
     }
 
@@ -229,6 +269,7 @@ export class ScheduleService {
       });
 
       if (machines.length === 0) {
+        console.log(`[ScheduleService] 그룹 ${groupId}에 등록된 기계가 없음`);
         return;
       }
 
@@ -243,6 +284,7 @@ export class ScheduleService {
           machineSlot.total = parsedQuantity;
           machineSlot.remain = parsedQuantity;
           await this.machineSlotRepo.save(machineSlot);
+          console.log(`[ScheduleService] 슬롯 업데이트: ${machine.machine_id} - ${mediId}, total=${parsedQuantity}`);
           break; // 첫 번째 슬롯만 업데이트
         }
       }
@@ -261,6 +303,7 @@ export class ScheduleService {
     doseCount?: string,
     requestUserId?: string,
   ) {
+    console.log('[ScheduleService] 스케줄 저장:', { medicineId, memberId, scheduleData, totalQuantity });
 
     // 나이 유효성 검사
     const validationResult = await this.validateUserAge(memberId, medicineId);
@@ -278,7 +321,7 @@ export class ScheduleService {
     }
 
     // 객체 형태 스케줄 데이터 처리
-    const { user, group } = await this.getUserGroup(memberId);
+    const { user, group, membership } = await this.getUserGroup(memberId);
 
     const medicine = await this.medicineRepo.findOne({
       where: { medi_id: medicineId, group_id: group.group_id }
@@ -287,6 +330,39 @@ export class ScheduleService {
     if (!medicine) {
       throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
     }
+
+    // 🔥 스케줄 저장 권한 확인 (자녀 계정의 경우)
+    let requestMembership: UserGroupMembership | null = null;
+    if (requestUserId && requestUserId !== memberId) {
+      requestMembership = await this.membershipRepo.findOne({
+        where: { user_id: requestUserId },
+        relations: ['user']
+      });
+    } else if (requestUserId === memberId) {
+      requestMembership = membership;
+    }
+
+    if (requestMembership && requestMembership.role === UserRole.CHILD) {
+      // 자녀 계정인 경우 권한 확인
+      const isCommonMedicine = !medicine.target_users || medicine.target_users.length === 0;
+      const isOwnMedicine = medicine.target_users && medicine.target_users.includes(memberId);
+      
+      // 가족 공통 약물이 아니고 본인 약물도 아닌 경우 차단
+      if (!isCommonMedicine && !isOwnMedicine) {
+        throw new ForbiddenException('이 약물의 스케줄을 등록할 권한이 없습니다.');
+      }
+      
+      console.log(`✅ [ScheduleService] 자녀 계정 권한 확인 통과: 가족 공통=${isCommonMedicine}, 본인 약물=${isOwnMedicine}`);
+    }
+
+    // 🔥 기존 스케줄 조회 (기록 삭제용)
+    const oldSchedules = await this.scheduleRepo.find({
+      where: {
+        user_id: memberId,
+        medi_id: medicineId,
+        group_id: group.group_id
+      }
+    });
 
     // 기존 스케줄 삭제
     await this.scheduleRepo.delete({
@@ -308,6 +384,28 @@ export class ScheduleService {
     });
 
     const savedSchedule = await this.scheduleRepo.save(schedule);
+
+    // 🔥 제안 1: 스케줄 재등록 시 해당 시간대 기록 삭제
+    const today = new Date().toISOString().split('T')[0];
+    const currentDayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+    
+    // 기존 스케줄 중 오늘 요일의 해당 시간대가 있었는지 확인
+    const oldScheduleForToday = oldSchedules.find(s => 
+      s.day_of_week === currentDayOfWeek && 
+      s.time_of_day === scheduleData.time_of_day
+    );
+    
+    // 🔥 기존 스케줄이 있었으면 재등록이므로 해당 시간대의 기록 삭제
+    if (oldScheduleForToday) {
+      console.log(`🔥 [ScheduleService] 스케줄 재등록 감지 - 오늘(${currentDayOfWeek}) ${scheduleData.time_of_day} 시간대 기록 삭제`);
+      await this.doseHistoryRepo.delete({
+        medi_id: medicineId,
+        user_id: memberId,
+        dose_date: today as any,
+        time_of_day: scheduleData.time_of_day
+      });
+      console.log(`✅ [ScheduleService] ${scheduleData.time_of_day} 시간대의 복용 기록 삭제 완료`);
+    }
 
     // MachineSlot 업데이트
     if (totalQuantity) {
@@ -339,7 +437,9 @@ export class ScheduleService {
       eveningDose?: number;
     }
   ) {
-    const { user, group } = await this.getUserGroup(memberId);
+    console.log('[ScheduleService] 타임도스 스케줄 저장:', { medicineId, memberId, timeDoses });
+
+    const { user, group, membership } = await this.getUserGroup(memberId);
 
     const medicine = await this.medicineRepo.findOne({
       where: { medi_id: medicineId, group_id: group.group_id }
@@ -348,6 +448,39 @@ export class ScheduleService {
     if (!medicine) {
       throw new NotFoundException('약물 정보를 찾을 수 없습니다.');
     }
+
+    // 🔥 스케줄 저장 권한 확인 (자녀 계정의 경우)
+    let requestMembership: UserGroupMembership | null = null;
+    if (requestUserId && requestUserId !== memberId) {
+      requestMembership = await this.membershipRepo.findOne({
+        where: { user_id: requestUserId },
+        relations: ['user']
+      });
+    } else if (requestUserId === memberId) {
+      requestMembership = membership;
+    }
+
+    if (requestMembership && requestMembership.role === UserRole.CHILD) {
+      // 자녀 계정인 경우 권한 확인
+      const isCommonMedicine = !medicine.target_users || medicine.target_users.length === 0;
+      const isOwnMedicine = medicine.target_users && medicine.target_users.includes(memberId);
+      
+      // 가족 공통 약물이 아니고 본인 약물도 아닌 경우 차단
+      if (!isCommonMedicine && !isOwnMedicine) {
+        throw new ForbiddenException('이 약물의 스케줄을 등록할 권한이 없습니다.');
+      }
+      
+      console.log(`✅ [ScheduleService] 자녀 계정 권한 확인 통과: 가족 공통=${isCommonMedicine}, 본인 약물=${isOwnMedicine}`);
+    }
+
+    // 🔥 기존 스케줄 조회 (기록 삭제용)
+    const oldSchedules = await this.scheduleRepo.find({
+      where: {
+        user_id: memberId,
+        medi_id: medicineId,
+        group_id: group.group_id
+      }
+    });
 
     // 기존 스케줄 삭제
     await this.scheduleRepo.delete({
@@ -403,6 +536,41 @@ export class ScheduleService {
 
     const savedSchedules = await this.scheduleRepo.save(newSchedules);
 
+    // 🔥 제안 1: 스케줄 재등록 시 해당 시간대 기록 삭제
+    const today = new Date().toISOString().split('T')[0];
+    const currentDayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()];
+    
+    // 기존 스케줄 중 오늘 요일의 시간대 목록
+    const oldTimeSlotsForToday = oldSchedules
+      .filter(s => s.day_of_week === currentDayOfWeek)
+      .map(s => s.time_of_day);
+    
+    // 새 스케줄 중 오늘 요일의 시간대 목록
+    const newTimeSlotsForToday = savedSchedules
+      .filter(s => s.day_of_week === currentDayOfWeek)
+      .map(s => s.time_of_day);
+    
+    // 🔥 재등록된 시간대 파악 (기존에도 있었고 새로도 있는 시간대)
+    const reRegisteredTimeSlots = oldTimeSlotsForToday.filter(
+      timeSlot => newTimeSlotsForToday.includes(timeSlot)
+    );
+    
+    // 🔥 재등록된 시간대의 기록 삭제
+    if (reRegisteredTimeSlots.length > 0) {
+      console.log(`🔥 [ScheduleService] 타임도스 스케줄 재등록 감지 - 오늘(${currentDayOfWeek}) 재등록된 시간대 기록 삭제:`, reRegisteredTimeSlots);
+      
+      for (const timeSlot of reRegisteredTimeSlots) {
+        await this.doseHistoryRepo.delete({
+          medi_id: medicineId,
+          user_id: memberId,
+          dose_date: today as any,
+          time_of_day: timeSlot
+        });
+      }
+      
+      console.log(`✅ [ScheduleService] ${reRegisteredTimeSlots.length}개 시간대의 복용 기록 삭제 완료`);
+    }
+
     // MachineSlot 업데이트
     if (totalQuantity) {
       const requestMembership = requestUserId ? await this.membershipRepo.findOne({
@@ -423,6 +591,9 @@ export class ScheduleService {
   async getSchedule(medicineId: string, memberId: string) {
     const { user, group } = await this.getUserGroup(memberId);
 
+    console.log(`[ScheduleService] 스케줄 조회: ${medicineId}/${memberId}, group: ${group.group_id}`);
+    console.log(`[DEBUG] getSchedule - User ${memberId} belongs to group_id: ${group.group_id}`); // Log user's group_id
+    console.log(`[DEBUG] getSchedule - Querying for medicineId: ${medicineId}`); // Log medicineId
 
     // 스케줄 조회
     const schedules = await this.scheduleRepo.find({
@@ -441,8 +612,10 @@ export class ScheduleService {
       .andWhere('slot.medi_id = :medi_id', { medi_id: medicineId })
       .getMany();
 
+    console.log(`[DEBUG] getSchedule - MachineSlots query result length: ${machineSlots.length}`); // Log machineSlots length
     if (machineSlots.length > 0) {
       // Removed the problematic log line, as machine.machine_id should now be accessible
+      console.log(`[DEBUG] getSchedule - Found MachineSlot for machine_id: ${machineSlots[0].machine.machine_id}, group_id: ${machineSlots[0].machine.group_id}`);
     }
 
     const slotInfo = machineSlots.length > 0 ? machineSlots[0] : null;
@@ -679,6 +852,7 @@ export class ScheduleService {
    */
   async deleteSchedule(mediId: string, userId: string) {
     try {
+      console.log(`🔥 [ScheduleService] 스케줄 삭제: mediId=${mediId}, userId=${userId}`);
 
       // 1. 사용자 그룹 정보 조회
       const { user, group } = await this.getUserGroup(userId);
@@ -693,6 +867,7 @@ export class ScheduleService {
       });
 
       if (schedules.length === 0) {
+        console.log(`⚠️ [ScheduleService] 삭제할 스케줄이 없습니다: mediId=${mediId}, userId=${userId}`);
         return {
           success: true,
           message: '삭제할 스케줄이 없습니다.',
@@ -707,6 +882,7 @@ export class ScheduleService {
         group_id: group.group_id
       });
 
+      console.log(`✅ [ScheduleService] 스케줄 삭제 완료: ${result.affected}개 삭제됨`);
 
       return {
         success: true,

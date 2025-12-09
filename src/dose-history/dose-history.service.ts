@@ -63,8 +63,22 @@ export class DoseHistoryService {
       // 사용자의 그룹 정보 조회
       const { group_id } = await this.getUserGroup(user_id);
 
+      // 🔥 스케줄에서 scheduled_dose 가져오기
+      const dayOfWeek = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()] as 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
+      const schedule = await this.scheduleRepository.findOne({
+        where: {
+          user_id: user_id,
+          medi_id: medi_id,
+          day_of_week: dayOfWeek,
+          time_of_day: time_of_day
+        }
+      });
+      
+      const scheduled_dose = schedule?.dose || actual_dose; // 스케줄이 없으면 actual_dose 사용
+
       // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       // notes에 "[배출완료]"가 포함된 레코드는 제외
+      // notes가 NULL인 경우도 포함 (체크리스트 기록)
       // 오늘 날짜의 기록만 조회 (이전 날짜 기록은 무시)
       let checkHistory = await this.doseHistoryRepository
         .createQueryBuilder('dh')
@@ -72,11 +86,12 @@ export class DoseHistoryService {
         .andWhere('dh.medi_id = :medi_id', { medi_id })
         .andWhere('dh.time_of_day = :time_of_day', { time_of_day })
         .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
-        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
+        .andWhere('(dh.notes IS NULL OR dh.notes NOT LIKE :dispensePattern)', { dispensePattern: '%[배출완료]%' })
         .getOne();
 
       if (checkHistory) {
         // 🔥 기존 체크 버튼 레코드가 있으면 업데이트
+        checkHistory.scheduled_dose = scheduled_dose; // 🔥 scheduled_dose도 업데이트
         checkHistory.actual_dose = actual_dose;
         checkHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
         checkHistory.completed_at = new Date();
@@ -91,7 +106,7 @@ export class DoseHistoryService {
         newCheckHistory.medi_id = medi_id;
         newCheckHistory.time_of_day = time_of_day;
         newCheckHistory.dose_date = todayDate;
-        newCheckHistory.scheduled_dose = actual_dose; // 임시로 같은 값 사용
+        newCheckHistory.scheduled_dose = scheduled_dose; // 🔥 스케줄에서 가져온 값 사용
         newCheckHistory.actual_dose = actual_dose;
         newCheckHistory.status = actual_dose === 0 ? DoseStatus.MISSED : DoseStatus.COMPLETED;
         newCheckHistory.completed_at = new Date();
@@ -357,13 +372,30 @@ export class DoseHistoryService {
         .select(['user.user_id', 'user.name', 'membership.role'])
         .getRawMany();
 
-      // 오늘의 모든 복용 기록 조회
+      // 오늘의 모든 복용 기록 조회 (24시간 기준 초기화, 체크리스트 기록만)
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
-        .andWhere('dh.dose_date = :today', { today })
-        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
+        .andWhere('DATE(dh.dose_date) = :today', { today })
+        .andWhere('(dh.notes IS NULL OR dh.notes NOT LIKE :dispensePattern)', { dispensePattern: '%[배출완료]%' })
         .getMany();
+
+      // 🔥 디버깅: 놓침 기록 확인
+      const missedHistories = todayHistories.filter(h => h.status === DoseStatus.MISSED);
+      const completedHistories = todayHistories.filter(h => h.status === DoseStatus.COMPLETED);
+      console.log(`🔍 [getDetailedFamilyStats] 오늘(${today}) 체크리스트 기록:`, {
+        전체: todayHistories.length,
+        완료: completedHistories.length,
+        놓침: missedHistories.length,
+        놓침상세: missedHistories.map(h => ({
+          user_id: h.user_id,
+          medi_id: h.medi_id,
+          time_of_day: h.time_of_day,
+          status: h.status,
+          notes: h.notes,
+          dose_date: h.dose_date
+        }))
+      });
 
       // 🔥 오늘 요일의 스케줄만 조회 (수정됨!)
       const scheduledDoses = await this.scheduleRepository
@@ -442,6 +474,15 @@ export class DoseHistoryService {
       const totalMissed = todayHistories.filter(h => h.status === DoseStatus.MISSED).length;
       const totalRemaining = totalScheduled - totalCompleted - totalMissed;
 
+      // 🔥 디버깅: 최종 통계 확인
+      console.log(`📊 [getDetailedFamilyStats] 최종 통계:`, {
+        totalScheduled,
+        totalCompleted,
+        totalMissed,
+        totalRemaining,
+        completionRate: totalScheduled > 0 ? Math.round((totalCompleted / totalScheduled) * 100) : 0
+      });
+
       return {
         summary: {
           total_scheduled: totalScheduled,
@@ -507,55 +548,89 @@ export class DoseHistoryService {
       const schedules = await scheduleQueryBuilder.getMany();
 
       if (medi_id) {
-        // 특정 약물의 시간대별 완료 상태 (오늘 날짜만 조회)
+        // 특정 약물의 시간대별 완료/놓침 상태 (오늘 날짜만 조회)
         // 🔥 새로운 스케줄이 등록된 경우 완료 상태 무시
         const getStatusForTimeSlot = (timeOfDay: 'morning' | 'afternoon' | 'evening') => {
-          const history = histories.find(h => h.time_of_day === timeOfDay && h.status === DoseStatus.COMPLETED);
-          if (!history) return false;
+          // 🔥 완료 상태 확인
+          const completedHistory = histories.find(h => h.time_of_day === timeOfDay && h.status === DoseStatus.COMPLETED);
+          // 🔥 놓침 상태 확인
+          const missedHistory = histories.find(h => h.time_of_day === timeOfDay && h.status === DoseStatus.MISSED);
           
           // 🔥 해당 시간대의 스케줄 찾기
           const schedule = schedules.find(s => s.time_of_day === timeOfDay);
-          if (!schedule) return false;
+          if (!schedule) {
+            // 스케줄이 없으면 상태도 없음
+            return { completed: false, missed: false };
+          }
           
-          // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 완료 상태 무시
-          if (schedule.created_at && history.completed_at) {
-            const scheduleCreatedDate = new Date(schedule.created_at);
-            const completedDate = new Date(history.completed_at);
-            
-            if (scheduleCreatedDate > completedDate) {
-              return false; // 새로운 스케줄이므로 복용 완료 필요
+          // 🔥 완료 상태 확인 (놓침보다 우선)
+          if (completedHistory) {
+            // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 완료 상태 무시
+            if (schedule.created_at && completedHistory.completed_at) {
+              const scheduleCreatedDate = new Date(schedule.created_at);
+              const completedDate = new Date(completedHistory.completed_at);
+              
+              if (scheduleCreatedDate > completedDate) {
+                // 새로운 스케줄이므로 완료 상태 무시
+                // 🔥 새로운 스케줄이면 놓침 상태도 무시 (아래 로직으로 계속)
+              } else {
+                // 스케줄 생성 후 완료된 것이므로 완료 상태 유지
+                return { completed: true, missed: false };
+              }
+            } else {
+              return { completed: true, missed: false };
             }
           }
           
-          return true;
+          // 🔥 놓침 상태 확인 (완료 상태가 무시된 경우에만)
+          if (missedHistory) {
+            // 🔥 스케줄 생성 시간이 놓침 시간보다 나중이면 새로운 스케줄이므로 놓침 상태 무시
+            if (schedule.created_at && missedHistory.completed_at) {
+              const scheduleCreatedDate = new Date(schedule.created_at);
+              const missedDate = new Date(missedHistory.completed_at);
+              
+              if (scheduleCreatedDate > missedDate) {
+                // 새로운 스케줄이므로 놓침 상태 무시
+                return { completed: false, missed: false };
+              }
+            }
+            // 🔥 놓침 상태는 사용자가 명시적으로 저장한 것이므로 유지
+            return { completed: false, missed: true };
+          }
+          
+          return { completed: false, missed: false };
         };
         
-        const status = {
-          morning: getStatusForTimeSlot('morning'),
-          afternoon: getStatusForTimeSlot('afternoon'),
-          evening: getStatusForTimeSlot('evening')
-        };
+        const morningStatus = getStatusForTimeSlot('morning');
+        const afternoonStatus = getStatusForTimeSlot('afternoon');
+        const eveningStatus = getStatusForTimeSlot('evening');
         
         // 🔥 클라이언트 호환성을 위해 직접 status 반환 (completion_status 래핑 제거)
         return {
           medi_id,
           date: targetDate,
-          morning: status.morning,
-          afternoon: status.afternoon,
-          evening: status.evening
+          morning: morningStatus.completed,
+          morningMissed: morningStatus.missed,
+          afternoon: afternoonStatus.completed,
+          afternoonMissed: afternoonStatus.missed,
+          evening: eveningStatus.completed,
+          eveningMissed: eveningStatus.missed
         };
       } else {
         // 모든 약물의 시간대별 완료 상태 (약물별로 그룹화, 오늘 날짜만)
         const statusByMedicine: Record<string, any> = {};
         
-        // 🔥 약물별로 초기화
+        // 🔥 약물별로 초기화 (missed 상태도 포함)
         schedules.forEach(schedule => {
           if (!statusByMedicine[schedule.medi_id]) {
             statusByMedicine[schedule.medi_id] = {
               medi_id: schedule.medi_id,
               morning: false,
               afternoon: false,
-              evening: false
+              evening: false,
+              morningMissed: false,
+              afternoonMissed: false,
+              eveningMissed: false
             };
           }
         });
@@ -577,29 +652,42 @@ export class DoseHistoryService {
               medi_id: history.medi_id,
               morning: false,
               afternoon: false,
-              evening: false
+              evening: false,
+              morningMissed: false,
+              afternoonMissed: false,
+              eveningMissed: false
             };
           }
           
-          // 🔥 새로운 스케줄이 등록된 경우 완료 상태 무시
+          // 🔥 해당 시간대의 스케줄 찾기
           const schedule = schedules.find(s => 
             s.medi_id === history.medi_id && 
             s.time_of_day === history.time_of_day
           );
           
-          if (schedule && schedule.created_at && history.completed_at) {
+          if (!schedule) {
+            return; // 스케줄이 없으면 무시
+          }
+          
+          // 🔥 새로운 스케줄이 등록된 경우 완료/놓침 상태 무시
+          if (schedule.created_at && history.completed_at) {
             const scheduleCreatedDate = new Date(schedule.created_at);
             const completedDate = new Date(history.completed_at);
             
-            // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 완료 상태 무시
+            // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면 새로운 스케줄이므로 상태 무시
             if (scheduleCreatedDate > completedDate) {
-              return; // 새로운 스케줄이므로 복용 완료 필요 (false 유지)
+              return; // 새로운 스케줄이므로 상태 초기화 (false 유지)
             }
           }
           
-          // 🔥 COMPLETED 상태만 완료로 표시
+          // 🔥 COMPLETED 상태는 완료로 표시
           if (history.status === DoseStatus.COMPLETED) {
             statusByMedicine[history.medi_id][history.time_of_day] = true;
+          }
+          // 🔥 MISSED 상태는 놓침으로 표시
+          else if (history.status === DoseStatus.MISSED) {
+            const missedKey = `${history.time_of_day}Missed` as 'morningMissed' | 'afternoonMissed' | 'eveningMissed';
+            statusByMedicine[history.medi_id][missedKey] = true;
           }
         });
         
@@ -679,13 +767,16 @@ export class DoseHistoryService {
       // 3. 오늘의 모든 복용 기록 조회 (24시간 기준 초기화)
       // 🔥 DATE 함수를 사용하여 날짜 부분만 비교 (시간 무시)
       // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
+      // 🔥 앱 재시작 시에도 체크리스트 기록이 유지되도록 notes 필터링 필수
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
         .andWhere('DATE(dh.dose_date) = :today', { today })
         .andWhere('dh.user_id IN (:...memberIds)', { memberIds })
-        .andWhere('dh.notes NOT LIKE :dispensePattern', { dispensePattern: '%[배출완료]%' })
+        .andWhere('(dh.notes IS NULL OR dh.notes NOT LIKE :dispensePattern)', { dispensePattern: '%[배출완료]%' })
         .getMany();
+      
+      console.log(`🔍 [getFamilyTodaySchedules] 오늘(${today}) 체크리스트 기록: ${todayHistories.length}개`);
 
       // 4. 약물 목록 조회 (약물명 매핑용)
       const medicines = await this.medicineRepository
@@ -729,15 +820,60 @@ export class DoseHistoryService {
                    h.time_of_day === schedule.time_of_day;
           });
 
+          // 🔥 상태 결정: 완료 상태 우선, 새로운 스케줄 등록 시 완료/놓침 상태 모두 무시
+          let finalStatus: 'completed' | 'missed' | 'partial' | null = null;
+          
+          if (history) {
+            const historyStatus = history.status as string; // enum을 문자열로 변환
+            
+            // 🔥 완료 상태 확인 (놓침보다 우선)
+            if (historyStatus === 'completed' || history.status === DoseStatus.COMPLETED) {
+              if (schedule.created_at && history.completed_at) {
+                const scheduleCreatedDate = new Date(schedule.created_at);
+                const completedDate = new Date(history.completed_at);
+                
+                // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면, 새로운 스케줄이므로 완료 상태 무시
+                if (scheduleCreatedDate > completedDate) {
+                  finalStatus = null; // 새로운 스케줄이므로 상태 초기화
+                } else {
+                  finalStatus = 'completed';
+                }
+              } else {
+                finalStatus = 'completed';
+              }
+            }
+            // 🔥 놓침 상태 확인 (완료 상태가 무시된 경우에만)
+            else if (historyStatus === 'missed' || history.status === DoseStatus.MISSED) {
+              if (schedule.created_at && history.completed_at) {
+                const scheduleCreatedDate = new Date(schedule.created_at);
+                const missedDate = new Date(history.completed_at);
+                
+                // 🔥 스케줄 생성 시간이 놓침 시간보다 나중이면, 새로운 스케줄이므로 놓침 상태 무시
+                if (scheduleCreatedDate > missedDate) {
+                  finalStatus = null; // 새로운 스케줄이므로 상태 초기화
+                } else {
+                  finalStatus = 'missed';
+                }
+              } else {
+                finalStatus = 'missed';
+              }
+            }
+            // 🔥 partial 상태도 완료로 처리
+            else if (historyStatus === 'partial' || history.status === DoseStatus.PARTIAL) {
+              finalStatus = 'completed';
+            }
+          }
+
           const scheduleData = {
             medi_id: schedule.medi_id,
             name: medicineName,
             time_of_day: schedule.time_of_day,
             scheduled_dose: schedule.dose,
             actual_dose: history?.actual_dose,
-            status: history?.status || null,
+            status: finalStatus,
             completed_at: history?.completed_at ? history.completed_at.toISOString() : undefined,
-            schedule_created_at: schedule.created_at ? schedule.created_at.toISOString() : undefined
+            schedule_created_at: schedule.created_at ? schedule.created_at.toISOString() : undefined,
+            notes: history?.notes || undefined // 🔥 배출 기록 전달 (체크리스트 기록은 notes가 없거나 [배출완료] 미포함)
           };
 
           if (isSupplement) {
