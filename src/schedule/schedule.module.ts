@@ -1,5 +1,5 @@
 // src/schedule/schedule.module.ts
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Schedule } from './entities/schedule.entity';
 import { DoseHistory } from '../dose-history/dose-history.entity';
@@ -14,8 +14,9 @@ import { UsersModule } from '../users/users.module';
 import { AccessTokenGuard } from 'src/auth/guard/bearer-token.guard';
 import { Machine } from 'src/machine/entities/machine.entity';
 import { MachineSlot } from 'src/machine/entities/machine-slot.entity';
+import { DoseHistoryModule } from '../dose-history/dose-history.module';
 import { ValidationModule } from '../validation/validation.module';
-import { DoseHistoryModule } from '@/dose-history/dose-history.module';
+import { MachineModule } from '../machine/machine.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { DoseHistoryModule } from '@/dose-history/dose-history.module';
     UsersModule,
     DoseHistoryModule,
     ValidationModule,
+    forwardRef(() => MachineModule), // 🔥 MachineService 사용을 위해 추가
   ],
   providers: [ScheduleService, AccessTokenGuard],
   controllers: [ScheduleController],

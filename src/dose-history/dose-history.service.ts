@@ -79,13 +79,13 @@ export class DoseHistoryService {
       // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       // notes에 "[배출완료]"가 포함된 레코드는 제외
       // notes가 NULL인 경우도 포함 (체크리스트 기록)
-      // 오늘 날짜의 기록만 조회 (이전 날짜 기록은 무시)
+      // 오늘 날짜의 기록만 조회 (completed_at 우선, 없으면 dose_date 기준)
       let checkHistory = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.user_id = :user_id', { user_id })
         .andWhere('dh.medi_id = :medi_id', { medi_id })
         .andWhere('dh.time_of_day = :time_of_day', { time_of_day })
-        .andWhere('DATE(dh.dose_date) = :today', { today: todayString })
+        .andWhere('(DATE(dh.completed_at) = :today OR (dh.completed_at IS NULL AND DATE(dh.dose_date) = :today))', { today: todayString })
         .andWhere('(dh.notes IS NULL OR dh.notes NOT LIKE :dispensePattern)', { dispensePattern: '%[배출완료]%' })
         .getOne();
 
@@ -768,10 +768,11 @@ export class DoseHistoryService {
       // 🔥 DATE 함수를 사용하여 날짜 부분만 비교 (시간 무시)
       // 🔥 체크 버튼으로 생성된 레코드만 조회 (배출 완료 레코드 제외)
       // 🔥 앱 재시작 시에도 체크리스트 기록이 유지되도록 notes 필터링 필수
+      // 🔥 dose_date 또는 completed_at이 오늘 날짜인 레코드 조회 (completed_at 우선)
       const todayHistories = await this.doseHistoryRepository
         .createQueryBuilder('dh')
         .where('dh.group_id = :group_id', { group_id })
-        .andWhere('DATE(dh.dose_date) = :today', { today })
+        .andWhere('(DATE(dh.completed_at) = :today OR (dh.completed_at IS NULL AND DATE(dh.dose_date) = :today))', { today })
         .andWhere('dh.user_id IN (:...memberIds)', { memberIds })
         .andWhere('(dh.notes IS NULL OR dh.notes NOT LIKE :dispensePattern)', { dispensePattern: '%[배출완료]%' })
         .getMany();
@@ -804,64 +805,133 @@ export class DoseHistoryService {
           const medicineName = medicineMap.get(schedule.medi_id) || schedule.medicine?.name || '알 수 없음';
           
           // 해당 스케줄의 복용 기록 찾기 (오늘 날짜만, 24시간 기준 초기화)
-          const history = todayHistories.find(h => {
-            // 🔥 날짜 확인 (이중 체크)
-            const historyDate = h.dose_date instanceof Date 
+          // 🔥 같은 약물, 같은 시간대에 여러 체크리스트 기록이 있을 수 있으므로
+          // 🔥 가장 최근의 체크리스트 기록을 선택 (completed_at 기준)
+          const matchingHistories = todayHistories.filter(h => {
+            // 🔥 날짜 확인: completed_at이 있으면 completed_at 기준, 없으면 dose_date 기준
+            let historyDate: string;
+            if (h.completed_at) {
+              historyDate = h.completed_at instanceof Date 
+                ? h.completed_at.toISOString().split('T')[0]
+                : new Date(h.completed_at).toISOString().split('T')[0];
+            } else {
+              historyDate = h.dose_date instanceof Date 
               ? h.dose_date.toISOString().split('T')[0]
               : h.dose_date;
+            }
             
             // 🔥 오늘 날짜가 아니면 무시
             if (historyDate !== today) {
               return false;
             }
             
-            return h.user_id === userId &&
-            h.medi_id === schedule.medi_id &&
-                   h.time_of_day === schedule.time_of_day;
+            const userMatch = h.user_id === userId;
+            const mediMatch = h.medi_id === schedule.medi_id;
+            const timeMatch = h.time_of_day === schedule.time_of_day;
+            
+            // 🔥 디버깅: 매칭 실패 원인 확인
+            if (!userMatch || !mediMatch || !timeMatch) {
+              console.log(`🔍 [getFamilyTodaySchedules] 매칭 실패 - ${medicineName} (${schedule.time_of_day}):`, {
+                history: {
+                  user_id: h.user_id,
+                  medi_id: h.medi_id,
+                  time_of_day: h.time_of_day,
+                  status: h.status,
+                  dose_date: historyDate
+                },
+                schedule: {
+                  user_id: userId,
+                  medi_id: schedule.medi_id,
+                  time_of_day: schedule.time_of_day
+                },
+                matches: {
+                  user: userMatch,
+                  medi: mediMatch,
+                  time: timeMatch
+                }
+              });
+            }
+            
+            return userMatch && mediMatch && timeMatch;
           });
+          
+          // 🔥 가장 최근의 체크리스트 기록 선택 (completed_at 기준 내림차순)
+          // 🔥 completed_at이 없는 레코드는 가장 나중에 정렬 (우선순위 낮음)
+          const history = matchingHistories.length > 0
+            ? matchingHistories.sort((a, b) => {
+                const aTime = a.completed_at ? new Date(a.completed_at).getTime() : -1;
+                const bTime = b.completed_at ? new Date(b.completed_at).getTime() : -1;
+                // completed_at이 있는 것이 우선, 둘 다 있으면 최신순
+                if (aTime === -1 && bTime === -1) return 0;
+                if (aTime === -1) return 1; // a가 completed_at 없으면 뒤로
+                if (bTime === -1) return -1; // b가 completed_at 없으면 뒤로
+                return bTime - aTime; // 최신순
+              })[0]
+            : null;
+          
+          // 🔥 디버깅: 기록 찾기 결과 로그
+          if (matchingHistories.length > 0) {
+            console.log(`✅ [getFamilyTodaySchedules] ${medicineName} (${schedule.time_of_day}) 기록 발견: ${matchingHistories.length}개`, {
+              selected: history ? {
+                status: history.status,
+                completed_at: history.completed_at?.toISOString(),
+                notes: history.notes,
+                user_id: history.user_id,
+                medi_id: history.medi_id,
+                time_of_day: history.time_of_day
+              } : null,
+              all: matchingHistories.map(h => ({
+                status: h.status,
+                completed_at: h.completed_at?.toISOString(),
+                notes: h.notes,
+                user_id: h.user_id,
+                medi_id: h.medi_id,
+                time_of_day: h.time_of_day
+              }))
+            });
+          }
 
-          // 🔥 상태 결정: 완료 상태 우선, 새로운 스케줄 등록 시 완료/놓침 상태 모두 무시
+          // 🔥 상태 결정: 완료 상태 우선
+          // 🔥 체크리스트 기록은 사용자가 명시적으로 체크한 것이므로, 스케줄 재등록과 관계없이 상태를 유지
+          // 🔥 이미 notes 필터링으로 체크리스트 기록만 조회되므로, 모든 기록의 상태를 그대로 사용
           let finalStatus: 'completed' | 'missed' | 'partial' | null = null;
           
           if (history) {
             const historyStatus = history.status as string; // enum을 문자열로 변환
             
-            // 🔥 완료 상태 확인 (놓침보다 우선)
+            // 🔥 체크리스트 기록은 사용자가 명시적으로 체크한 것이므로 상태를 그대로 유지
+            // 🔥 스케줄 재등록과 관계없이 체크리스트 기록의 상태를 우선 사용
             if (historyStatus === 'completed' || history.status === DoseStatus.COMPLETED) {
-              if (schedule.created_at && history.completed_at) {
-                const scheduleCreatedDate = new Date(schedule.created_at);
-                const completedDate = new Date(history.completed_at);
-                
-                // 🔥 스케줄 생성 시간이 완료 시간보다 나중이면, 새로운 스케줄이므로 완료 상태 무시
-                if (scheduleCreatedDate > completedDate) {
-                  finalStatus = null; // 새로운 스케줄이므로 상태 초기화
-                } else {
                   finalStatus = 'completed';
                 }
-              } else {
-                finalStatus = 'completed';
-              }
-            }
-            // 🔥 놓침 상태 확인 (완료 상태가 무시된 경우에만)
             else if (historyStatus === 'missed' || history.status === DoseStatus.MISSED) {
-              if (schedule.created_at && history.completed_at) {
-                const scheduleCreatedDate = new Date(schedule.created_at);
-                const missedDate = new Date(history.completed_at);
-                
-                // 🔥 스케줄 생성 시간이 놓침 시간보다 나중이면, 새로운 스케줄이므로 놓침 상태 무시
-                if (scheduleCreatedDate > missedDate) {
-                  finalStatus = null; // 새로운 스케줄이므로 상태 초기화
-                } else {
                   finalStatus = 'missed';
-                }
-              } else {
-                finalStatus = 'missed';
-              }
             }
             // 🔥 partial 상태도 완료로 처리
             else if (historyStatus === 'partial' || history.status === DoseStatus.PARTIAL) {
               finalStatus = 'completed';
             }
+            
+            // 🔥 디버깅: 상태 결정 로그
+            console.log(`✅ [getFamilyTodaySchedules] ${medicineName} (${schedule.time_of_day}): historyStatus=${historyStatus}, finalStatus=${finalStatus}, completed_at=${history.completed_at?.toISOString()}, schedule.created_at=${schedule.created_at?.toISOString()}`);
+          } else {
+            // 🔥 기록이 없는 경우, todayHistories 전체를 확인
+            console.log(`❌ [getFamilyTodaySchedules] ${medicineName} (${schedule.time_of_day}): 기록 없음 - 전체 기록 확인:`, {
+              schedule: {
+                user_id: userId,
+                medi_id: schedule.medi_id,
+                time_of_day: schedule.time_of_day
+              },
+              todayHistoriesCount: todayHistories.length,
+              todayHistories: todayHistories.map(h => ({
+                user_id: h.user_id,
+                medi_id: h.medi_id,
+                time_of_day: h.time_of_day,
+                status: h.status,
+                dose_date: h.dose_date instanceof Date ? h.dose_date.toISOString().split('T')[0] : h.dose_date,
+                completed_at: h.completed_at?.toISOString()
+              }))
+            });
           }
 
           const scheduleData = {

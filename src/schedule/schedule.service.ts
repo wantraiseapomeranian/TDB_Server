@@ -17,6 +17,7 @@ import { MachineSlot } from '../machine/entities/machine-slot.entity';
 import { UserRole } from '../users/entities/user-role.enum';
 import { DoseHistoryService } from '../dose-history/dose-history.service';
 import { AgeValidationService } from '../validation/age-validation.service';
+import { MachineService } from '../machine/machine.service';
 import { randomUUID } from 'crypto';
 
 interface AgeValidationResult {
@@ -46,6 +47,7 @@ export class ScheduleService {
     private readonly machineSlotRepo: Repository<MachineSlot>,
     private readonly doseHistoryService: DoseHistoryService,
     private readonly ageValidationService: AgeValidationService,
+    private readonly machineService: MachineService, // 🔥 MachineService 주입
   ) {}
 
   // 사용자의 그룹 정보 조회 헬퍼 메서드
@@ -251,11 +253,6 @@ export class ScheduleService {
       parsedQuantity = Number(cleanedQuantity);
     }
 
-    if (parsedQuantity <= 0) {
-      console.log(`[ScheduleService] totalQuantity가 유효하지 않음: ${totalQuantity}`);
-      return;
-    }
-
     // 권한 확인 (부모만 수량 업데이트 가능)
     if (requestMembership && requestMembership.role !== UserRole.PARENT) {
       console.log(`[ScheduleService] 권한 없음: ${requestMembership.role} (보호자만 수량 설정 가능)`);
@@ -274,19 +271,87 @@ export class ScheduleService {
       }
 
       // 각 기계에서 해당 약물의 슬롯 찾기
+      let slotFound = false;
       for (const machine of machines) {
         const machineSlot = await this.machineSlotRepo.findOne({
           where: { machine_id: machine.machine_id, medi_id: mediId }
         });
 
         if (machineSlot) {
-          // 기존 슬롯 업데이트
-          machineSlot.total = parsedQuantity;
-          machineSlot.remain = parsedQuantity;
+          // 🔥 기존 슬롯 업데이트
+          // totalQuantity가 유효한 경우: total과 remain 모두 업데이트
+          // totalQuantity가 0이거나 유효하지 않은 경우: 기존 remain 값 유지, total만 업데이트 (remain이 있으면 remain 사용, 없으면 total 사용)
+          if (parsedQuantity > 0) {
+            // 유효한 totalQuantity가 전달된 경우
+            machineSlot.total = parsedQuantity;
+            // remain이 null이거나 0이면 total로 설정, 아니면 기존 remain 유지
+            if (machineSlot.remain === null || machineSlot.remain === 0) {
+              machineSlot.remain = parsedQuantity;
+            }
+            } else {
+              // totalQuantity가 0이거나 유효하지 않은 경우
+              // 기존 remain 값을 total로 사용 (스케줄 재저장 시 remain 값을 total로 리셋)
+              if (machineSlot.remain !== null && machineSlot.remain > 0) {
+                machineSlot.total = machineSlot.remain;
+                console.log(`🔄 [ScheduleService] totalQuantity가 0이므로 기존 remain(${machineSlot.remain})을 total로 설정`);
+              } else if (machineSlot.total !== null && machineSlot.total > 0) {
+                // remain도 없고 total만 있는 경우, total을 remain으로도 설정
+                machineSlot.remain = machineSlot.total;
+                console.log(`🔄 [ScheduleService] totalQuantity가 0이고 remain이 없으므로 기존 total(${machineSlot.total})을 remain으로도 설정`);
+              } else {
+                // 🔥 슬롯은 존재하지만 total과 remain이 모두 없는 경우
+                // 기본값 30으로 설정 (의약품 기본값과 동일)
+                const defaultQuantity = 30;
+                machineSlot.total = defaultQuantity;
+                machineSlot.remain = defaultQuantity;
+                console.log(`🔄 [ScheduleService] totalQuantity가 0이고 기존 슬롯 값도 없으므로 기본값(${defaultQuantity})으로 설정`);
+              }
+            }
+          
           await this.machineSlotRepo.save(machineSlot);
-          console.log(`[ScheduleService] 슬롯 업데이트: ${machine.machine_id} - ${mediId}, total=${parsedQuantity}`);
+          console.log(`✅ [ScheduleService] 슬롯 업데이트 성공: ${machine.machine_id} - ${mediId}, total=${machineSlot.total}, remain=${machineSlot.remain}`);
+          slotFound = true;
           break; // 첫 번째 슬롯만 업데이트
+        } else {
+          console.log(`⚠️ [ScheduleService] 슬롯을 찾을 수 없음: machine_id=${machine.machine_id}, medi_id=${mediId}`);
         }
+      }
+      
+      // 🔥 슬롯을 찾지 못한 경우 새로 생성 (totalQuantity가 유효한 경우에만)
+      if (!slotFound && machines.length > 0 && parsedQuantity > 0) {
+        console.log(`🔄 [ScheduleService] 슬롯이 없어 새로 생성 시도: medi_id=${mediId}, totalQuantity=${parsedQuantity}`);
+        
+        try {
+          // 빈 슬롯 할당
+          const slotResult = await this.machineService.assignSlot(groupId);
+          
+          if (slotResult.success && slotResult.slot) {
+            // 슬롯 예약 (생성)
+            const reserveResult = await this.machineService.reserveSlot(
+              groupId,
+              mediId,
+              slotResult.slot,
+              parsedQuantity
+            );
+            
+            if (reserveResult.success) {
+              console.log(`✅ [ScheduleService] 슬롯 생성 성공: ${mediId} → 슬롯 ${slotResult.slot}번, total=${parsedQuantity}, remain=${parsedQuantity}`);
+              slotFound = true;
+            } else {
+              console.error(`❌ [ScheduleService] 슬롯 예약 실패: ${reserveResult.error}`);
+            }
+          } else {
+            console.error(`❌ [ScheduleService] 슬롯 할당 실패: ${slotResult.error}`);
+          }
+        } catch (error) {
+          console.error(`❌ [ScheduleService] 슬롯 생성 중 오류:`, error);
+        }
+      } else if (!slotFound && parsedQuantity <= 0) {
+        console.log(`⚠️ [ScheduleService] 슬롯을 찾을 수 없고 totalQuantity도 유효하지 않음: ${totalQuantity} (슬롯 생성 불가)`);
+      }
+      
+      if (!slotFound) {
+        console.error(`❌ [ScheduleService] MachineSlot 업데이트/생성 실패: 그룹 ${groupId}의 모든 기계에서 ${mediId} 슬롯을 찾거나 생성할 수 없음`);
       }
 
     } catch (error) {
